@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "praca-magisterska"
+version = "0.1.0"
+description = ""
+authors = ["Marcin Dorożyński <259295@student.pwr.edu.pl>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+opencv-python = "^4.10.0.84"
+
+
+[tool.poetry.group.test.dependencies]
+black = "^24.10.0"
+flake8 = "^7.1.1"
+isort = "^5.13.2"
+mypy = "^1.12.1"
+pre-commit = "^4.0.1"
+pre-commit-hooks = "^5.0.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
