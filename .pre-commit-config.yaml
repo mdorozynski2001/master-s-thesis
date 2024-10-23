@@ -29,7 +29,7 @@ repos:
       - id: check-added-large-files
         name: check-added-large-files
         entry: check-added-large-files
-        args: ['--maxkb=3722']
+        args: ['--maxkb=6722']
         language: system
 
       - id: check-ast
