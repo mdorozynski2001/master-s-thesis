@@ -42,8 +42,7 @@ WORKDIR /app
 COPY poetry.lock /app/poetry.lock
 COPY pyproject.toml /app/pyproject.toml
 
-RUN --mount=type=cache,target=/root/.cache/pypoetry/cache \
-    --mount=type=cache,target=/root/.cache/pypoetry/artifacts \
+RUN poetry config cache-dir /app/.cache/pypoetry && \
     poetry install --no-interaction --no-ansi --no-root -vvv
 
 RUN poetry run python3 --version
