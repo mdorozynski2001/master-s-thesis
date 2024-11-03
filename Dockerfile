@@ -1,4 +1,4 @@
-FROM pytorch/pytorch:2.0.0-cuda11.7-cudnn8-runtime
+FROM pytorch/pytorch:1.7.1-cuda11.0-cudnn8-runtime
 SHELL ["/bin/bash", "-c", "-o", "pipefail"]
 
 # Nvidia
