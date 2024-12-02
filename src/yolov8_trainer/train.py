@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Optional
 
 import typer
 from munch import Munch
@@ -21,7 +22,22 @@ def inner_main(
     workers_count: int = typer.Option(
         4, help="Number of workers for data loading and preparation."
     ),
-):
+    cfg_path: Optional[Path] = typer.Option(
+        None,
+        help="Optional path to config file for training overrides.",
+        file_okay=True,
+        dir_okay=False,
+    ),
+    deterministic: bool = typer.Option(
+        True, help="Sets an identical seed for `pytorch`, `numpy` and `python.random`."
+    ),
+    seed: Optional[int] = typer.Option(
+        42, help="Specify a specific seed for deterministic training."
+    ),
+    resume_training: bool = typer.Option(
+        False, help="Inidicates if training should be resumed from the last checkpoint."
+    ),
+) -> None:
 
     # Load the model.
     model = YOLO(model_path)
@@ -31,14 +47,20 @@ def inner_main(
         batch=batch_size,
         imgsz=image_width,
         workers=workers_count,
-        device="cuda",
-        name="train",
+        deterministic=deterministic,
+        seed=seed,
+        cache=False,
+        resume=resume_training,
+        pretrained=True,
     )
+
+    if cfg_path and cfg_path.is_file():
+        settings.update(cfg=str(cfg_path))
 
     model.train(data=settings_path, **settings)
 
 
-def main():
+def main() -> None:
     typer.run(inner_main)
 
 

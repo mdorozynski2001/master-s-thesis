@@ -11,6 +11,7 @@ packages = [
 [tool.poetry.scripts]
 train = "yolov8_trainer.train:main"
 evaluate = "yolov8_trainer.evaluate:main"
+remove_symlinks = "yolov8_trainer.remove_symlinks:main"
 
 [tool.poetry.dependencies]
 python = "^3.10"

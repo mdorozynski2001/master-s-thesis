@@ -17,7 +17,7 @@ def inner_main(
     ),
     image_width: int = typer.Option(640, help="Image width."),
     split: str = typer.Option("test", help=""),
-):
+) -> None:
 
     # Load the model.
     model = YOLO(model_path)
@@ -31,7 +31,7 @@ def inner_main(
     _ = model.val(data=settings_path, **settings)
 
 
-def main():
+def main() -> None:
     typer.run(inner_main)
 
 
