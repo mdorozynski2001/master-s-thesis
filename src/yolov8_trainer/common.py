@@ -1,0 +1,1 @@
+SPLITS = ["train", "test", "val"]
