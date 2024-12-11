@@ -3,13 +3,14 @@ from pathlib import Path
 
 import typer
 
-from yolov8_trainer.common import SPLITS
+from yolov8_trainer.common import DATASETS_DIR, SPLITS, WORKDIR
 
 
 def inner_main(
-    datasets_dir: Path = typer.Argument(..., file_okay=False, dir_okay=True, help="")
+    datasets_dir: Path = typer.Argument(
+        DATASETS_DIR, file_okay=False, dir_okay=True, help=""
+    )
 ) -> None:
-    workdir = Path.cwd()
 
     all_datasets: dict[str, list[str]] = {key: [] for key in SPLITS}
 
@@ -23,14 +24,14 @@ def inner_main(
         for dataset in datasets_paths:
             dataset_txt_file_path = dataset / f"{dataset.name}_{split}.yaml"
             with open(dataset_txt_file_path, "w") as file:
-                single_dataset_path = workdir / dataset
+                single_dataset_path = WORKDIR / dataset
                 file.write(f"path: {single_dataset_path}\n")
                 file.write(f"{split}: {split}/images\n")
                 file.write("names:\n")
                 file.write("   0: person\n")
                 file.write("   2: forklift\n")
 
-            all_datasets[split].append(str(workdir / dataset_txt_file_path))
+                all_datasets[split].append(str(single_dataset_path))
 
     json_path = "all_datasets.json"
     with open(json_path, "w") as file:
