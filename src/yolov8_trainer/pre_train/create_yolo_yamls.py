@@ -5,6 +5,7 @@ from pathlib import Path
 import typer
 
 from yolov8_trainer.common import DATASETS_DIR
+from yolov8_trainer.pre_train.utils import create_yaml
 
 
 def inner_main(
@@ -64,6 +65,9 @@ def inner_main(
                     raise OSError(f"Error: {e}")
 
                 id += 1
+
+        out_yaml_path = output_dir / f"{split}.yaml"
+        create_yaml(out_yaml_path, output_dir, split)
 
 
 def main() -> None:

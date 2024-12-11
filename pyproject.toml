@@ -16,15 +16,9 @@ init_datasets = "yolov8_trainer.pre_train.init_datasets:main"
 
 [tool.poetry.dependencies]
 python = "^3.10"
-opencv-python = "^4.10.0.84"
-typer = "^0.12.5"
-ultralytics = "^8.3.20"
+ultralytics = "^8.3.49"
+typer = "^0.15.1"
 munch = "^4.0.0"
-torch = [
-  { markers = "sys_platform == 'linux'", python=">=3.10,<3.11", url = "https://download.pytorch.org/whl/cu117/torch-2.0.0%2Bcu117-cp310-cp310-linux_x86_64.whl" },
-  { markers = "sys_platform == 'linux'", python=">=3.11,<3.12", url = "https://download.pytorch.org/whl/cu117/torch-2.0.0%2Bcu117-cp311-cp311-linux_x86_64.whl" },
-]
-
 
 [tool.poetry.group.test.dependencies]
 black = "^24.10.0"
