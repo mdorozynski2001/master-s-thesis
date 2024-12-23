@@ -9,17 +9,16 @@ packages = [
 ]
 
 [tool.poetry.scripts]
-train = "yolov8_trainer.train:main"
-evaluate = "yolov8_trainer.evaluate:main"
+train = "yolov8_trainer.train.train:main"
+evaluate = "yolov8_trainer.post_train.evaluate:main"
 remove_symlinks = "yolov8_trainer.remove_symlinks:main"
+init_datasets = "yolov8_trainer.pre_train.init_datasets:main"
 
 [tool.poetry.dependencies]
 python = "^3.10"
-opencv-python = "^4.10.0.84"
-typer = "^0.12.5"
-ultralytics = "^8.3.20"
+ultralytics = "^8.3.49"
+typer = "^0.15.1"
 munch = "^4.0.0"
-
 
 [tool.poetry.group.test.dependencies]
 black = "^24.10.0"
