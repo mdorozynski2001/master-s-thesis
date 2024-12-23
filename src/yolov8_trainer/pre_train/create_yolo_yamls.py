@@ -3,6 +3,7 @@ from datetime import datetime
 from pathlib import Path
 
 import typer
+from tqdm import tqdm
 
 from yolov8_trainer.common import DATASETS_DIR
 from yolov8_trainer.pre_train.utils import create_yaml
@@ -34,8 +35,7 @@ def inner_main(
 
         id = 0
 
-        for dataset in train_data[split]:
-            print(dataset)
+        for dataset in tqdm(train_data[split]):
             labels_files_dir = Path(dataset) / split / "labels"
             images_files_dir = Path(dataset) / split / "images"
             labels_path_list = list(Path(labels_files_dir).glob("*"))
@@ -48,7 +48,7 @@ def inner_main(
                 img_path = img_list[0]
 
                 label_symlink_path = out_split_txt_dir / f"{id}.txt"
-                img_symlink_path = out_split_images_dir / f"{id}.{img_path.suffix}"
+                img_symlink_path = out_split_images_dir / f"{id}{img_path.suffix}"
 
                 try:
                     label_symlink_path.symlink_to(label_path)
