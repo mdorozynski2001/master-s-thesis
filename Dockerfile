@@ -1,4 +1,4 @@
-FROM pytorch/pytorch:2.0.0-cuda11.7-cudnn8-runtime
+FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
 SHELL ["/bin/bash", "-c", "-o", "pipefail"]
 
 # Nvidia
@@ -27,7 +27,7 @@ ENV PYTHONFAULTHANDLER=1 \
     PIP_DEFAULT_TIMEOUT=100 \
     PIP_ROOT_USER_ACTION=ignore \
     # poetry
-    POETRY_VERSION=1.8.4 \
+    POETRY_VERSION=1.8.0 \
     POETRY_NO_INTERACTION=1 \
     # For development inside docker container we do not use virtualenv
     POETRY_VIRTUALENVS_CREATE=false \
