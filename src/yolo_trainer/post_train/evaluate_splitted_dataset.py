@@ -1,5 +1,7 @@
+import json
 from pathlib import Path
 
+import numpy as np
 import typer
 from munch import Munch
 from ultralytics import YOLO
@@ -28,7 +30,15 @@ def inner_main(
         split=split,
     )
 
-    _ = model.val(data=settings_path, **settings)
+    result = model.val(data=settings_path, **settings)
+    result_dict: dict[str, np.float64] = result.results_dict
+    for key in result_dict.keys():
+        result_dict[key] = float(result_dict[key])
+
+    with open(
+        f"{model_path.parent.parent}/evaluation_results/result.json", mode="w"
+    ) as file:
+        json.dump(result_dict, file, indent=4)
 
 
 def main() -> None:

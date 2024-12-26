@@ -10,7 +10,8 @@ packages = [
 
 [tool.poetry.scripts]
 train = "yolo_trainer.train.train:main"
-evaluate = "yolo_trainer.post_train.evaluate:main"
+evaluate_single = "yolo_trainer.post_train.evaluate_single:main"
+evaluate_splitted_dataset = "yolo_trainer.post_train.evaluate_splitted_dataset:main"
 remove_symlinks = "yolo_trainer.remove_symlinks:main"
 init_datasets = "yolo_trainer.pre_train.init_datasets:main"
 create_yolo_yamls = "yolo_trainer.pre_train.create_yolo_yamls:main"
