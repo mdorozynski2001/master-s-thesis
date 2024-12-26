@@ -5,8 +5,8 @@ from pathlib import Path
 import typer
 from tqdm import tqdm
 
-from yolov8_trainer.common import DATASETS_DIR
-from yolov8_trainer.pre_train.utils import create_yaml
+from yolo_trainer.common import DATASETS_DIR
+from yolo_trainer.pre_train.utils import create_yaml
 
 
 def inner_main(

@@ -5,14 +5,15 @@ description = ""
 authors = ["Marcin Dorożyński <259295@student.pwr.edu.pl>"]
 readme = "README.md"
 packages = [
-    { include = "yolov8_trainer", from = "src" },
+    { include = "yolo_trainer", from = "src" },
 ]
 
 [tool.poetry.scripts]
-train = "yolov8_trainer.train.train:main"
-evaluate = "yolov8_trainer.post_train.evaluate:main"
-remove_symlinks = "yolov8_trainer.remove_symlinks:main"
-init_datasets = "yolov8_trainer.pre_train.init_datasets:main"
+train = "yolo_trainer.train.train:main"
+evaluate = "yolo_trainer.post_train.evaluate:main"
+remove_symlinks = "yolo_trainer.remove_symlinks:main"
+init_datasets = "yolo_trainer.pre_train.init_datasets:main"
+create_yolo_yamls = "yolo_trainer.pre_train.create_yolo_yamls:main"
 
 [tool.poetry.dependencies]
 python = "^3.10"

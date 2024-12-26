@@ -3,8 +3,8 @@ from pathlib import Path
 
 import typer
 
-from yolov8_trainer.common import DATASETS_DIR, SPLITS, WORKDIR
-from yolov8_trainer.pre_train.utils import create_yaml
+from yolo_trainer.common import DATASETS_DIR, SPLITS, WORKDIR
+from yolo_trainer.pre_train.utils import create_yaml
 
 
 def inner_main(
