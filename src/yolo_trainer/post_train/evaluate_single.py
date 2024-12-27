@@ -6,13 +6,13 @@ import typer
 from munch import Munch
 from ultralytics import YOLO
 
+from yolo_trainer.post_train.utils import RESULT_JSON
+
 
 def inner_main(
-    settings_path: Path = typer.Argument(
-        None, dir_okay=False, file_okay=True, help="Path to yolov8 settings file."
-    ),
+    settings_path: Path = typer.Argument(None, dir_okay=False, file_okay=True, help="Path to yolov8 settings file."),
     model_path: Path = typer.Option(
-        "yolov8n.pt",
+        "yolo11n.pt",
         dir_okay=False,
         file_okay=True,
         help="Path to pretrained YOLO model.",
@@ -35,9 +35,7 @@ def inner_main(
     for key in result_dict.keys():
         result_dict[key] = float(result_dict[key])
 
-    with open(
-        f"{model_path.parent.parent}/evaluation_results/result.json", mode="w"
-    ) as file:
+    with open(f"{model_path.parent.parent}/evaluation_results/{RESULT_JSON}", mode="w") as file:
         json.dump(result_dict, file, indent=4)
 
 

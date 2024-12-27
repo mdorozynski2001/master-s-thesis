@@ -1,0 +1,21 @@
+from pathlib import Path
+import typer
+
+from yolo_trainer.post_train.utils import RESULT_JSON, RESULT_ONLY_COMBINED, RESULT_SPLITTED_DATASETS
+
+
+def inner_main(
+    models_dir : Path = typer.Argument(...,dir_okay=True,file_okay=False,help="Path to models to compare.")
+) -> None:
+    result_paths = list(models_dir.rglob(RESULT_JSON))
+    result_splitted_datasets = list(models_dir.rglob(RESULT_SPLITTED_DATASETS))
+    result_only_combined = list(models_dir.rglob(RESULT_ONLY_COMBINED))
+
+    pass
+
+def main() -> None:
+    typer.run(inner_main)
+
+
+if __name__ == "__main__":
+    main()

@@ -7,13 +7,13 @@ import typer
 from munch import Munch
 from ultralytics import YOLO
 
+from yolo_trainer.post_train.utils import RESULT_ONLY_COMBINED, RESULT_SPLITTED_DATASETS
+
 
 def inner_main(
-    dataset_path: Path = typer.Argument(
-        None, dir_okay=True, file_okay=True, help="Path to yolov8 settings file."
-    ),
+    dataset_path: Path = typer.Argument(None, dir_okay=True, file_okay=True, help="Path to yolov8 settings file."),
     model_path: Path = typer.Option(
-        "yolov8n.pt",
+        "yolo11n.pt",
         dir_okay=False,
         file_okay=True,
         help="Path to pretrained YOLO model.",
@@ -48,18 +48,17 @@ def inner_main(
             datasets_result["combined"] = result_dict.copy()  # Użycie kopii
         else:
             for key in result_dict.keys():
-                datasets_result["combined"][key] = (
-                    datasets_result["combined"][key] * id + result_dict[key]
-                ) / (id + 1)
+                datasets_result["combined"][key] = (datasets_result["combined"][key] * id + result_dict[key]) / (id + 1)
 
     print(datasets_result)
 
     with open(
-        f"{model_path.parent.parent}/evaluation_results/all/result.json", mode="w"
+        f"{model_path.parent.parent}/evaluation_results/all/{RESULT_SPLITTED_DATASETS}",
+        mode="w",
     ) as file:
         json.dump(datasets_result, file, indent=4)
     with open(
-        f"{model_path.parent.parent}/evaluation_results/all/result_only_combined.json",
+        f"{model_path.parent.parent}/evaluation_results/all/{RESULT_ONLY_COMBINED}",
         mode="w",
     ) as file:
         json.dump(datasets_result["combined"], file, indent=4)
