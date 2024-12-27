@@ -7,7 +7,11 @@ import typer
 from munch import Munch
 from ultralytics import YOLO
 
-from yolo_trainer.post_train.utils import RESULT_ONLY_COMBINED, RESULT_SPLITTED_DATASETS
+from yolo_trainer.post_train.utils import (
+    RESULT_ONLY_COMBINED,
+    RESULT_SPLITTED_DATASETS,
+    load_yaml,
+)
 
 
 def inner_main(
@@ -18,9 +22,12 @@ def inner_main(
         file_okay=True,
         help="Path to pretrained YOLO model.",
     ),
-    image_width: int = typer.Option(640, help="Image width."),
+    args_path: Path = typer.Option(...),
     split: str = typer.Option("test", help=""),
 ) -> None:
+    configuration = load_yaml(args_path)
+    image_width = configuration.imgsz
+
     datasets_result = {}
 
     dataset_yamls_paths = list(dataset_path.rglob(f"*{split}*.yaml"))
@@ -28,6 +35,8 @@ def inner_main(
 
     for id, settings_path in enumerate(dataset_yamls_paths):
         dataset_name = settings_path.parent.name
+
+        print(f"Evaluating dataset: {dataset_name}")
 
         # Load the model.
         model = YOLO(model_path)
@@ -49,8 +58,6 @@ def inner_main(
         else:
             for key in result_dict.keys():
                 datasets_result["combined"][key] = (datasets_result["combined"][key] * id + result_dict[key]) / (id + 1)
-
-    print(datasets_result)
 
     with open(
         f"{model_path.parent.parent}/evaluation_results/all/{RESULT_SPLITTED_DATASETS}",

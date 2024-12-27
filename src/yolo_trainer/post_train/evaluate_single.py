@@ -6,7 +6,7 @@ import typer
 from munch import Munch
 from ultralytics import YOLO
 
-from yolo_trainer.post_train.utils import RESULT_JSON
+from yolo_trainer.post_train.utils import RESULT_JSON, load_yaml
 
 
 def inner_main(
@@ -17,9 +17,12 @@ def inner_main(
         file_okay=True,
         help="Path to pretrained YOLO model.",
     ),
-    image_width: int = typer.Option(640, help="Image width."),
+    args_path: Path = typer.Option(...),
     split: str = typer.Option("test", help=""),
 ) -> None:
+
+    configuration = load_yaml(args_path)
+    image_width = configuration.imgsz
 
     # Load the model.
     model = YOLO(model_path)
