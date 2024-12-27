@@ -23,13 +23,13 @@ def inner_main(
 
     configuration = load_yaml(args_path)
     image_width = configuration.imgsz
-
+    model_relative_path = model_path.parent.parent.relative_to("runs/detect/")
     # Load the model.
     model = YOLO(model_path)
     settings = Munch(
         save=True,
         imgsz=image_width,
-        name=f"{model_path.parent.parent.name}/evaluation_results",
+        name=f"{model_relative_path}/evaluation_results",
         split=split,
     )
 

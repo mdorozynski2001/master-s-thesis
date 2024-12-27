@@ -38,12 +38,13 @@ def inner_main(
 
         print(f"Evaluating dataset: {dataset_name}")
 
+        model_relative_path = model_path.parent.parent.relative_to("runs/detect/")
         # Load the model.
         model = YOLO(model_path)
         settings = Munch(
             save=False,
             imgsz=image_width,
-            name=f"{model_path.parent.parent.name}/evaluation_results/all/{dataset_name}",
+            name=f"{model_relative_path}/evaluation_results/all/{dataset_name}",
             split=split,
         )
 
