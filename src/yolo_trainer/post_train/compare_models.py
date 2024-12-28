@@ -13,6 +13,9 @@ def inner_main(
 ) -> None:
     result_paths = list(models_dir.rglob(RESULT_JSON))
     result_splitted_datasets_paths = list(models_dir.rglob(RESULT_SPLITTED_DATASETS))
+
+    result_paths.sort()
+    result_splitted_datasets_paths.sort()
     result_splitted_datasets = {}
     results = {}
 
