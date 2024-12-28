@@ -36,12 +36,12 @@ def inner_main(
 
     for metric in metrics:
         fig = go.Figure()
-        datasets = set()
-        traces = {}
+        datasets_set = set()
+        traces: dict[str, list[tuple[str, float]]] = {}
 
         for model_data in result_splitted_datasets.values():
-            datasets.update(model_data.keys())
-        datasets = sorted(datasets)
+            datasets_set.update(model_data.keys())
+        datasets = sorted(datasets_set)
 
         for model_name, model_data in result_splitted_datasets.items():
             for dataset in datasets:

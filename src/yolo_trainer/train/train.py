@@ -2,8 +2,8 @@ from pathlib import Path
 from typing import Optional
 
 import typer
-from munch import Munch
-from ultralytics import YOLO
+from munch import Munch  # type: ignore[import-untyped]
+from ultralytics import YOLO  # type: ignore[import-untyped]
 
 
 def inner_main(

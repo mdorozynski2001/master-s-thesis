@@ -4,8 +4,8 @@ from pathlib import Path
 
 import numpy as np
 import typer
-from munch import Munch
-from ultralytics import YOLO
+from munch import Munch  # type: ignore[import-untyped]
+from ultralytics import YOLO  # type: ignore[import-untyped]
 
 from yolo_trainer.post_train.utils import (
     RESULT_ONLY_COMBINED,

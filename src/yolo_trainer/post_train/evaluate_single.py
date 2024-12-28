@@ -3,8 +3,8 @@ from pathlib import Path
 
 import numpy as np
 import typer
-from munch import Munch
-from ultralytics import YOLO
+from munch import Munch  # type: ignore[import-untyped]
+from ultralytics import YOLO  # type: ignore[import-untyped]
 
 from yolo_trainer.post_train.utils import RESULT_JSON, load_yaml
 
@@ -36,7 +36,7 @@ def inner_main(
     result = model.val(data=settings_path, **settings)
     result_dict: dict[str, np.float64] = result.results_dict
     for key in result_dict.keys():
-        result_dict[key] = float(result_dict[key])
+        result_dict[key] = float(result_dict[key])  # type: ignore[assignment]
 
     with open(f"{model_path.parent.parent}/evaluation_results/{RESULT_JSON}", mode="w") as file:
         json.dump(result_dict, file, indent=4)

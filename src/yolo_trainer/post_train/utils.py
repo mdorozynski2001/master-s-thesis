@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import yaml
-from munch import Munch
+from munch import Munch  # type: ignore[import-untyped]
 
 RESULT_JSON = "result.json"
 # file with evaluation results made on whole unitem test dataset.
