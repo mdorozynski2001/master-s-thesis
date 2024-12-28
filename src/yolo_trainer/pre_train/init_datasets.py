@@ -7,11 +7,7 @@ from yolo_trainer.common import DATASETS_DIR, SPLITS, WORKDIR
 from yolo_trainer.pre_train.utils import create_yaml
 
 
-def inner_main(
-    datasets_dir: Path = typer.Argument(
-        DATASETS_DIR, file_okay=False, dir_okay=True, help=""
-    )
-) -> None:
+def inner_main(datasets_dir: Path = typer.Argument(DATASETS_DIR, file_okay=False, dir_okay=True, help="")) -> None:
 
     all_datasets: dict[str, list[str]] = {key: [] for key in SPLITS}
 

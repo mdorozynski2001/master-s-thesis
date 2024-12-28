@@ -10,9 +10,7 @@ from yolo_trainer.pre_train.utils import create_yaml
 
 
 def inner_main(
-    train_json_path: Path = typer.Argument(
-        ..., exists=True, file_okay=True, dir_okay=False, help=""
-    ),
+    train_json_path: Path = typer.Argument(..., exists=True, file_okay=True, dir_okay=False, help=""),
 ) -> None:
     with open(train_json_path, "r") as file:
         train_data = json.load(file)
@@ -42,9 +40,7 @@ def inner_main(
             for label_path in labels_path_list:
                 img_list = list(Path(images_files_dir).glob(f"{label_path.stem}.*"))
                 if len(img_list) != 1:
-                    raise NameError(
-                        f"{label_path.name} has {len(img_list)} match(es)!!"
-                    )
+                    raise NameError(f"{label_path.name} has {len(img_list)} match(es)!!")
                 img_path = img_list[0]
 
                 label_symlink_path = out_split_txt_dir / f"{id}.txt"
