@@ -14,8 +14,10 @@ splitted_test_data_path="datasets/test/"
 compare_directory_output="comparison"
 
 regenerate_evaluation_results=false
+evaluate_single_flag=true
+evaluate_splitted_dataset_flag=true
 
-while getopts "d:i:m:f:o:r" flag; do
+while getopts "d:i:m:f:o:r:e:s" flag; do
     case "${flag}" in
         d) compare_directory="$OPTARG";;
         i) evaluation_common_path="$OPTARG";;
@@ -23,6 +25,8 @@ while getopts "d:i:m:f:o:r" flag; do
         f) splitted_test_data_path="$OPTARG";;
         o) compare_directory_output="$OPTARG";;
         r) regenerate_evaluation_results=true;;
+        e) evaluate_single_flag=true;;
+        s) evaluate_splitted_dataset_flag=true;;
         \?) echo "Wrong flag: -$OPTARG" >&2;;
     esac
 done
@@ -45,8 +49,13 @@ if "$regenerate_evaluation_results"; then
     echo "Evaluating model: $model_name"
     rm -rf "$result_save_dir"
 
+    if "$evaluate_single_flag"; then
     evaluate_single $unitem_test_data_path --args-path="$args_path" --model-path="$model_path"
+    fi
+
+    if "$evaluate_splitted_dataset_flag"; then
     evaluate_splitted_dataset $splitted_test_data_path --args-path="$args_path" --model-path="$model_path"
+    fi
     done
 else
     echo "Using existing evaluation results for all available models. Make sure that they are up to date."
