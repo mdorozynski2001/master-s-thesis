@@ -1,5 +1,4 @@
 datasets/
 runs/
 *.pyc
-*.json
 .cache/
