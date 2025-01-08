@@ -2,6 +2,7 @@
     "train": [
         "/app/datasets/train/cut_paste_forklift",
         "/app/datasets/train/nvidia_forklift_1",
+        "/app/datasets/train/stora_enzo_forklift_cut_paste",
         "/app/datasets/train/nvidia_forklift_random_color_1"
     ],
     "test": [
