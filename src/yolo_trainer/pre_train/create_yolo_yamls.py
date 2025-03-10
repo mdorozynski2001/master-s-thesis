@@ -11,7 +11,7 @@ from yolo_trainer.pre_train.utils import create_yaml
 
 def inner_main(
     train_json_path: Path = typer.Argument(..., exists=True, file_okay=True, dir_okay=False, help=""),
-    output_dir : Path = typer.Option(None,file_okay=False,dir_okay=True, help=""),
+    output_dir: Path = typer.Option(None, file_okay=False, dir_okay=True, help=""),
 ) -> None:
     with open(train_json_path, "r") as file:
         train_data = json.load(file)
