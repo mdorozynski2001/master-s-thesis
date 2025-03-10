@@ -18,7 +18,7 @@ def inner_main(
 
     current_datetime = datetime.now()
     if output_dir is None:
-        formatted_date = current_datetime.strftime("%Y_%m_%d_%H_%M")
+        formatted_date = current_datetime.strftime("%Y_%m_%d_%H_%M")  # type: ignore[unreachable]
         output_dir = DATASETS_DIR / f"yolo_data_{formatted_date}"
     else:
         output_dir = WORKDIR / output_dir
