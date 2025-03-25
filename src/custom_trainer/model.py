@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -11,7 +12,6 @@ from torchvision import transforms  # type: ignore[import-untyped]
 from tqdm import tqdm
 
 from custom_trainer.dataset import YoloDataset
-
 
 
 def calculate_linear_input(image_size: int, feature_extractor: nn.Sequential) -> int:
@@ -52,7 +52,7 @@ class NeuralNetwork(nn.Module):
         self.cls_head = nn.Linear(128, num_classes)
         self.box_head = nn.Linear(128, 4)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         x = self.feature_extractor(x)
         x = self.flatten(x)
         features = self.fc_layers(x)
@@ -91,12 +91,14 @@ class CustomDetector:
         self.test_dataset = YoloDataset(Path("test/images"), Path("test/labels"), transform=transform)
         self.test_dataloader = DataLoader(self.test_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 
-    def loss_fn(self, class_preds, box_preds, class_targets, box_targets):
+    def loss_fn(
+        self, class_preds: torch.Tensor, box_preds: torch.Tensor, class_targets: torch.Tensor, box_targets: torch.Tensor
+    ) -> Any:
         cls_loss = nn.CrossEntropyLoss()(class_preds, class_targets)
         reg_loss = nn.SmoothL1Loss()(box_preds, box_targets)
         return cls_loss + reg_loss
 
-    def train(self, patience=3) -> None:
+    def train(self, patience: int = 3) -> None:
         best_val_loss = float("inf")
         patience_counter = 0
 
@@ -152,7 +154,7 @@ class CustomDetector:
                 print("🛑 Early stopping triggered.")
                 break
 
-    def validate(self, epoch):
+    def validate(self, epoch: int) -> float:
         self.model.eval()
         total_val_loss = 0
 
@@ -226,7 +228,7 @@ def inner_main(
     epochs: int = typer.Option(10, help=""),
     batch_size: int = typer.Option(32, help=""),
 ) -> None:
-    detector = CustomDetector(num_classes=1, image_size=image_size, epochs=epochs, batch_size=batch_size)
+    detector = CustomDetector(num_classes=3, image_size=image_size, epochs=epochs, batch_size=batch_size)
     detector.train()
     detector.eval()
 
