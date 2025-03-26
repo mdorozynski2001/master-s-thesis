@@ -32,7 +32,9 @@ class YoloDataset(Dataset):  # type: ignore[type-arg]
                 parts = line.strip().split()
                 class_id = int(parts[0])
                 x_center, y_center, width, height = map(float, parts[1:])
-                labels.append([class_id, x_center, y_center, width, height])
+                labels.append(
+                    [class_id, x_center - width / 2, y_center - height / 2, x_center + width / 2, y_center + height / 2]
+                )
 
         # Konwersja do tensora
         if self.transform:

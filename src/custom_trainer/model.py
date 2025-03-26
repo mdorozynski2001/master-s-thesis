@@ -76,6 +76,8 @@ class CustomDetector:
             ]
         )
 
+        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=5, gamma=0.1)
+
         def collate_fn(batch):
             images, targets = zip(*batch)
             return torch.stack(images, dim=0), list(targets)
@@ -109,11 +111,15 @@ class CustomDetector:
             for images, targets in tqdm(self.train_dataloader):
                 images = images.to(self.device)
                 class_targets = [
-                    t[:, 0].long().to(self.device) if t.dim() > 1 else torch.zeros(1, dtype=torch.long).to(self.device)
+                    (
+                        t[:, 0].long().to(self.device)
+                        if len(t) > 0
+                        else torch.tensor([0], dtype=torch.long).to(self.device)
+                    )
                     for t in targets
                 ]
                 box_targets = [
-                    t[:, 1].long().to(self.device) if t.dim() > 1 else torch.zeros(1, dtype=torch.long).to(self.device)
+                    t[:, 1:].to(self.device) if len(t) > 0 else torch.zeros((1, 4), dtype=torch.float32).to(self.device)
                     for t in targets
                 ]
 
@@ -134,6 +140,7 @@ class CustomDetector:
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
+                self.scheduler.step()
 
                 total_loss += loss.item()
 
@@ -227,8 +234,9 @@ def inner_main(
     image_size: int = typer.Option(640, help=""),
     epochs: int = typer.Option(10, help=""),
     batch_size: int = typer.Option(32, help=""),
+    num_classes: int = typer.Option(3, help=""),
 ) -> None:
-    detector = CustomDetector(num_classes=3, image_size=image_size, epochs=epochs, batch_size=batch_size)
+    detector = CustomDetector(num_classes=num_classes, image_size=image_size, epochs=epochs, batch_size=batch_size)
     detector.train()
     detector.eval()
 
