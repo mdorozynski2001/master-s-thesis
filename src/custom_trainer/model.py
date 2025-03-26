@@ -415,11 +415,13 @@ def postprocess_detections(
 
 def inner_main(
     dataset_path: Path = typer.Argument(..., help=""),
-    image_size: int = typer.Option(400, help=""),
-    epochs: int = typer.Option(10, help=""),
-    batch_size: int = typer.Option(32, help=""),
-    num_classes: int = typer.Option(3, help=""),
-    num_boxes: int = typer.Option(10, help=""),
+    image_size: int = typer.Option(500, help=""),
+    epochs: int = typer.Option(300, help=""),
+    batch_size: int = typer.Option(64, help=""),
+    num_classes: int = typer.Option(2, help=""),
+    num_boxes: int = typer.Option(15, help=""),
+    train : bool = typer.Option(True, help=""),
+    model_path : Path = typer.Option(None, help="")
 ) -> None:
     class_names = ["Class 0", "Class 1", "Class 2"]
     trainer = ObjectDetectorTrainer(
@@ -429,9 +431,11 @@ def inner_main(
         num_boxes=num_boxes,
         dataset_path=dataset_path,
     )
-    trainer.train_and_validate(epochs=epochs)
-
-    test_model_on_images(trainer.model, trainer.test_dataloader, class_names, trainer.device, num_images=5)
+    if train:
+        trainer.train_and_validate(epochs=epochs)
+    else:
+        trainer.model.load_state_dict(torch.load(model_path))
+        test_model_on_images(trainer.model, trainer.test_dataloader, class_names, trainer.device, num_images=5)
 
 
 def main() -> None:
