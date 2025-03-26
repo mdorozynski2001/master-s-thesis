@@ -2,32 +2,64 @@ from pathlib import Path
 from typing import Any
 
 import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.optim as optim
+import torchvision.ops as ops  # type: ignore[import-untyped]
 import typer
 from torch import nn
 from torch.utils.data import DataLoader
-from torchvision import transforms  # type: ignore[import-untyped]
+from torchvision import transforms
 from tqdm import tqdm
 
 from custom_trainer.dataset import YoloDataset
 
 
-def calculate_linear_input(image_size: int, feature_extractor: nn.Sequential) -> int:
-    dummy_input = torch.randn(1, 3, image_size, image_size)
+class DetectionLoss(nn.Module):
+    def __init__(self, lambda_coord: float = 5.0, lambda_noobj: float = 0.5) -> None:
+        super(DetectionLoss, self).__init__()
+        self.bbox_loss = nn.SmoothL1Loss()
+        self.class_loss = nn.CrossEntropyLoss(ignore_index=0)
+        self.lambda_coord = lambda_coord
+        self.lambda_noobj = lambda_noobj
 
-    feature_map = feature_extractor(dummy_input)
+    def forward(
+        self,
+        pred_bboxes: torch.Tensor,
+        pred_classes: torch.Tensor,
+        target_bboxes: torch.Tensor,
+        target_classes: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        pred_bboxes: (batch, num_boxes, 4)
+        pred_classes: (batch, num_boxes, num_classes)
+        target_bboxes: (batch, num_boxes, 4)
+        target_classes: (batch, num_boxes)
+        """
 
-    flattened_size = feature_map.view(feature_map.size(0), -1).shape[1]
+        # 🛑 Dopasowanie wymiarów target_bboxes do pred_bboxes
+        batch_size = pred_bboxes.shape[0]
+        if target_bboxes.shape[0] != batch_size:
+            target_bboxes = target_bboxes[:batch_size]
+            target_classes = target_classes[:batch_size]
 
-    return int(flattened_size)
+        # 🛑 Zabezpieczenie przed pustymi tensorami
+        if target_bboxes.numel() == 0 or target_classes.numel() == 0:
+            return torch.tensor(0.0, device=pred_bboxes.device, requires_grad=True)
+
+        # Obliczamy straty
+        bbox_loss = self.lambda_coord * self.bbox_loss(pred_bboxes, target_bboxes)
+        class_loss = self.class_loss(pred_classes.permute(0, 2, 1), target_classes)
+
+        return bbox_loss + class_loss
 
 
-class NeuralNetwork(nn.Module):
-    def __init__(self, num_classes: int = 3, image_size: int = 640):
-        super().__init__()
+class Backbone(nn.Module):
+    def __init__(self, trainable_layers: int = 3) -> None:
+        super(Backbone, self).__init__()
 
+        # Extract layers up to the final convolutional block
         self.feature_extractor = nn.Sequential(
             nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
@@ -40,34 +72,84 @@ class NeuralNetwork(nn.Module):
             nn.MaxPool2d(kernel_size=2, stride=2),
         )
 
+        # Optionally freeze some layers for transfer learning
+        layers_to_freeze = len(list(self.feature_extractor.children())) - trainable_layers
+        for i, layer in enumerate(self.feature_extractor.children()):
+            if i < layers_to_freeze:
+                for param in layer.parameters():
+                    param.requires_grad = False
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.feature_extractor(x)
+
+
+def calculate_linear_input(image_size: int, feature_extractor: Backbone) -> int:
+    dummy_input = torch.randn(1, 3, image_size, image_size)
+
+    feature_map = feature_extractor(dummy_input)
+
+    flattened_size = feature_map.view(feature_map.size(0), -1).shape[1]
+
+    return int(flattened_size)
+
+
+class DetectionHead(nn.Module):
+    def __init__(self, in_channels: int, num_classes: int, num_boxes: int = 10) -> None:
+        super(DetectionHead, self).__init__()
         self.flatten = nn.Flatten()
+
+        self.num_boxes = num_boxes  # Maksymalna liczba obiektów do wykrycia
         self.fc_layers = nn.Sequential(
-            nn.Linear(calculate_linear_input(image_size, self.feature_extractor), 256),
+            nn.Linear(in_channels, 512),
             nn.ReLU(),
             nn.Dropout(0.5),
+            nn.Linear(512, 256),
+            nn.ReLU(),
             nn.Linear(256, 128),
             nn.ReLU(),
         )
 
-        self.cls_head = nn.Linear(128, num_classes)
-        self.box_head = nn.Linear(128, 4)
+        self.class_head = nn.Linear(128, num_boxes * num_classes)
+        self.bbox_head = nn.Linear(128, num_boxes * 4)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        x = self.feature_extractor(x)
         x = self.flatten(x)
-        features = self.fc_layers(x)
-        class_logits = self.cls_head(features)
-        bbox_preds = self.box_head(features)
-        return class_logits, bbox_preds
+        x = self.fc_layers(x)
+        bbox_predictions = torch.sigmoid(self.bbox_head(x)).view(-1, self.num_boxes, 4)  # 🛑 Sigmoid -> [0,1]
+        class_logits = self.class_head(x).view(-1, self.num_boxes, self.class_head.out_features // self.num_boxes)
+        return bbox_predictions, class_logits
 
 
-class CustomDetector:
-    def __init__(self, num_classes: int = 3, image_size: int = 640, epochs: int = 10, batch_size: int = 32):
+class ObjectDetector(nn.Module):
+    def __init__(self, backbone: Backbone, num_classes: int, num_boxes: int = 10, image_size: int = 300):
+        super(ObjectDetector, self).__init__()
+        self.backbone = backbone
+        self.detection_head = DetectionHead(
+            in_channels=calculate_linear_input(image_size, backbone), num_classes=num_classes, num_boxes=num_boxes
+        )
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        features = self.backbone(x)
+        bbox_predictions, class_logits = self.detection_head(features)
+        return bbox_predictions, class_logits
+
+
+class ObjectDetectorTrainer:
+    def __init__(
+        self,
+        dataset_path: Path,
+        num_classes: int = 2,
+        image_size: int = 350,
+        epochs: int = 10,
+        batch_size: int = 32,
+        num_boxes: int = 10,
+    ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = NeuralNetwork(num_classes, image_size).to(self.device)
+        self.model = ObjectDetector(Backbone(), num_classes, num_boxes, image_size).to(self.device)
         self.epochs = epochs
 
         self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
+        self.criterion = DetectionLoss().to(self.device)
 
         transform = transforms.Compose(
             [
@@ -76,77 +158,137 @@ class CustomDetector:
             ]
         )
 
-        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=5, gamma=0.1)
-
         def collate_fn(batch):
             images, targets = zip(*batch)
             return torch.stack(images, dim=0), list(targets)
 
-        self.train_dataset = YoloDataset(Path("train/images"), Path("train/labels"), transform=transform)
+        self.train_dataset = YoloDataset(
+            dataset_path / Path("train/images"), dataset_path / Path("train/labels"), transform=transform
+        )
         self.train_dataloader = DataLoader(
             self.train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn
         )
 
-        self.val_dataset = YoloDataset(Path("val/images"), Path("val/labels"), transform=transform)
+        self.val_dataset = YoloDataset(
+            dataset_path / Path("val/images"), dataset_path / Path("val/labels"), transform=transform
+        )
         self.val_dataloader = DataLoader(self.val_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 
-        self.test_dataset = YoloDataset(Path("test/images"), Path("test/labels"), transform=transform)
+        self.test_dataset = YoloDataset(
+            dataset_path / Path("test/images"), dataset_path / Path("test/labels"), transform=transform
+        )
         self.test_dataloader = DataLoader(self.test_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 
-    def loss_fn(
-        self, class_preds: torch.Tensor, box_preds: torch.Tensor, class_targets: torch.Tensor, box_targets: torch.Tensor
-    ) -> Any:
-        cls_loss = nn.CrossEntropyLoss()(class_preds, class_targets)
-        reg_loss = nn.SmoothL1Loss()(box_preds, box_targets)
-        return cls_loss + reg_loss
+    def train_model(self) -> float:
+        self.model.train()
+        total_loss = 0.0
 
-    def train(self, patience: int = 3) -> None:
-        best_val_loss = float("inf")
-        patience_counter = 0
+        for images, targets in tqdm(self.train_dataloader, desc="Training"):
+            images = images.to(self.device)
 
-        for epoch in range(self.epochs):
-            self.model.train()
-            total_loss = 0
+            # Sprawdzamy, czy batch zawiera targety
+            if not isinstance(targets, list) or len(targets) == 0:
+                continue
 
-            for images, targets in tqdm(self.train_dataloader):
-                images = images.to(self.device)
-                class_targets = [
-                    (
-                        t[:, 0].long().to(self.device)
-                        if len(t) > 0
-                        else torch.tensor([0], dtype=torch.long).to(self.device)
+            target_bboxes_list = [t[:, 1:].to(self.device) for t in targets if t.shape[0] > 0]
+            target_classes_list = [t[:, 0].long().to(self.device) for t in targets if t.shape[0] > 0]
+
+            if len(target_bboxes_list) == 0:
+                continue
+
+            num_boxes = self.model.detection_head.num_boxes
+            batch_size = images.shape[0]
+
+            # Dopasowanie wymiarów
+            target_bboxes = torch.stack(
+                [
+                    torch.cat([t, torch.zeros(max(0, num_boxes - t.shape[0]), 4, device=self.device)])
+                    for t in target_bboxes_list
+                ]
+            )[:batch_size]
+            target_classes = torch.stack(
+                [
+                    torch.cat(
+                        [t, torch.full((max(0, num_boxes - t.shape[0]),), 0, dtype=torch.long, device=self.device)]
                     )
-                    for t in targets
+                    for t in target_classes_list
                 ]
-                box_targets = [
-                    t[:, 1:].to(self.device) if len(t) > 0 else torch.zeros((1, 4), dtype=torch.float32).to(self.device)
-                    for t in targets
-                ]
+            )[:batch_size]
 
-                class_preds, box_preds = self.model(images)
+            self.optimizer.zero_grad()
+            pred_bboxes, pred_classes = self.model(images)
 
-                losses = []
-                for i in range(len(images)):
-                    for j in range(len(class_targets[i])):
-                        loss = self.loss_fn(
-                            class_preds[i].unsqueeze(0),
-                            box_preds[i].unsqueeze(0),
-                            class_targets[i][j].unsqueeze(0),
-                            box_targets[i][j].unsqueeze(0),
+            loss = self.criterion(pred_bboxes, pred_classes, target_bboxes, target_classes)
+            loss = torch.Tensor(loss)
+
+            if torch.isnan(loss):
+                continue
+
+            loss.backward()
+            self.optimizer.step()
+            total_loss += loss.item()
+
+        return total_loss / len(self.train_dataloader)
+
+    def validate_model(self, val: bool) -> float:
+        if val:
+            dataloader = self.val_dataloader
+        else:
+            dataloader = self.train_dataloader
+        self.model.eval()
+        total_loss = 0.0
+
+        with torch.no_grad():
+            for images, targets in tqdm(dataloader, desc="Validation"):
+                images = images.to(self.device)
+
+                if not isinstance(targets, list) or len(targets) == 0:
+                    continue
+
+                target_bboxes = [t[:, 1:].to(self.device) for t in targets if t.shape[0] > 0]
+                target_classes = [t[:, 0].long().to(self.device) for t in targets if t.shape[0] > 0]
+
+                if len(target_bboxes) == 0:
+                    continue
+
+                num_boxes = self.model.detection_head.num_boxes
+                batch_size = images.shape[0]
+
+                target_bboxes = torch.stack(
+                    [
+                        torch.cat([t, torch.zeros(max(0, num_boxes - t.shape[0]), 4, device=self.device)])
+                        for t in target_bboxes
+                    ]
+                )[:batch_size]
+                target_classes = torch.stack(
+                    [
+                        torch.cat(
+                            [t, torch.full((max(0, num_boxes - t.shape[0]),), 0, dtype=torch.long, device=self.device)]
                         )
-                        losses.append(loss)
-                loss = torch.stack(losses).mean()
+                        for t in target_classes
+                    ]
+                )[:batch_size]
 
-                self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
-                self.scheduler.step()
+                pred_bboxes, pred_classes = self.model(images)
+
+                loss = self.criterion(pred_bboxes, pred_classes, target_bboxes, target_classes)
+
+                if torch.isnan(loss):
+                    continue
 
                 total_loss += loss.item()
 
-            print(f"Epoch {epoch+1}/{self.epochs}, Training Loss: {total_loss / len(self.train_dataloader)}")
+        return total_loss / len(dataloader)
 
-            val_loss = self.validate(epoch)
+    def train_and_validate(self, val: bool = True, epochs: int = 10, patience: int = 5) -> None:
+        best_val_loss = float("inf")
+        patience_counter = 0
+        for epoch in range(epochs):
+            print(f"\nEpoch {epoch + 1}/{epochs}")
+            train_loss = self.train_model()
+            val_loss = self.validate_model(val)
+
+            print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
@@ -161,84 +303,135 @@ class CustomDetector:
                 print("🛑 Early stopping triggered.")
                 break
 
-    def validate(self, epoch: int) -> float:
-        self.model.eval()
-        total_val_loss = 0
+        print("Training complete!")
 
-        with torch.no_grad():
-            for images, targets in tqdm(self.val_dataloader):
-                images = images.to(self.device)
-                class_targets = [
-                    t[:, 0].long().to(self.device) if t.dim() > 1 else torch.zeros(1, dtype=torch.long).to(self.device)
-                    for t in targets
-                ]
-                box_targets = [
-                    t[:, 1].long().to(self.device) if t.dim() > 1 else torch.zeros(1, dtype=torch.long).to(self.device)
-                    for t in targets
-                ]
 
-                class_preds, box_preds = self.model(images)
+def run_inference(
+    model: ObjectDetector,
+    dataloader: DataLoader,
+    device: torch.device,
+    conf_threshold: float = 0.5,
+    iou_threshold: float = 0.3,
+) -> list[tuple[Any, Any, torch.Tensor, torch.Tensor]]:
+    model.eval()
+    detections = []
 
-                losses = []
-                for i in range(len(images)):
-                    for j in range(len(class_targets[i])):
-                        loss = self.loss_fn(
-                            class_preds[i].unsqueeze(0),
-                            box_preds[i].unsqueeze(0),
-                            class_targets[i][j].unsqueeze(0),
-                            box_targets[i][j].unsqueeze(0),
-                        )
-                        losses.append(loss)
-                loss = torch.stack(losses).mean()
-                total_val_loss += loss.item()
+    with torch.no_grad():
+        for images, _ in tqdm(dataloader, desc="Running Inference"):
+            images = images.to(device)
+            pred_bboxes, pred_classes = model(images)
 
-        avg_val_loss = total_val_loss / len(self.val_dataloader)
-        print(f"Epoch {epoch+1}, Validation Loss: {avg_val_loss}")
+            for i in range(len(images)):
+                # Softmax dla klas i wybór najlepszej
+                probs = torch.softmax(pred_classes[i], dim=-1)
+                scores, labels = probs.max(dim=-1)
 
-        return avg_val_loss
+                # Filtrowanie bboxów na podstawie confidence threshold
+                keep = scores > conf_threshold
+                boxes = pred_bboxes[i][keep]
+                scores = scores[keep]
+                labels = labels[keep]
 
-    def eval(self) -> None:
-        self.model.eval()
-        image, _ = self.test_dataset[10]
-        image_resized = image.unsqueeze(0).to(self.device)
+                # Non-Maximum Suppression (NMS)
+                if len(boxes) > 0:
+                    keep_idx = ops.nms(boxes, scores, iou_threshold)
+                    boxes = boxes[keep_idx]
+                    scores = scores[keep_idx]
+                    labels = labels[keep_idx]
 
-        with torch.no_grad():
-            class_logits, bbox_preds = self.model(image_resized)
+                detections.append((images[i].cpu(), boxes.cpu(), labels.cpu(), scores.cpu()))
 
-        predicted_class = torch.argmax(class_logits, dim=1).item()
-        print(bbox_preds)
-        bbox = bbox_preds[0].cpu().numpy()
+    return detections
 
-        print(f"Predykcja: Klasa {predicted_class}, Bbox: {bbox}")
 
+def visualize_detections(detections, class_names, num_images=5, conf_threshold=0.5):
+    for i in range(min(num_images, len(detections))):
+        image, boxes, labels, scores = detections[i]
         image = image.permute(1, 2, 0).cpu().numpy()
-        image = (image * 255).astype(np.uint8)
-        image = cv2.resize(image, (1920, 1080))
-        height, width, _ = image.shape
-        x_center, y_center, w, h = bbox
+        image = (image * 255).astype("uint8")
+        image = np.ascontiguousarray(image)
 
-        x_min = int((x_center - w / 2) * width)
-        y_min = int((y_center - h / 2) * height)
-        x_max = int((x_center + w / 2) * width)
-        y_max = int((y_center + h / 2) * height)
+        h, w, _ = image.shape
+        for box, label, score in zip(boxes, labels, scores):
+            if score < conf_threshold:
+                continue  # 🛑 Filtrujemy bboxy z niskim score
 
-        image_with_bbox = cv2.rectangle(image.copy(), (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
-        WINDOW_NAME = "aaa"
-        cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
-        cv2.imshow(WINDOW_NAME, image_with_bbox)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+            x1, y1, x2, y2 = box.tolist()
+            x1 = int(x1 * w)
+            y1 = int(y1 * h)
+            x2 = int(x2 * w)
+            y2 = int(y2 * h)
+
+            label_name = class_names[label] if label < len(class_names) else f"Class {label}"
+            cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(image, f"{label_name} {score:.2f}", (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+        plt.figure(figsize=(8, 8))
+        plt.imshow(image)
+        plt.axis("off")
+        plt.show()
+
+
+def test_model_on_images(model, dataloader, class_names, device, num_images=5):
+    detections = run_inference(model, dataloader, device)
+    visualize_detections(detections, class_names, num_images)
+
+
+def postprocess_detections(
+    bbox_predictions: torch.Tensor, class_logits: torch.Tensor, conf_threshold: float = 0.5, iou_threshold: float = 0.3
+) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+    """
+    Przetwarza wyniki detekcji, odfiltrowując niskie prawdopodobieństwa i nakładające się obiekty.
+
+    bbox_predictions: (batch_size, num_boxes, 4)
+    class_logits: (batch_size, num_boxes, num_classes)
+    """
+    batch_size, num_boxes, _ = bbox_predictions.shape
+    final_boxes = []
+    final_labels = []
+
+    for i in range(batch_size):
+        # Obliczamy prawdopodobieństwa klas
+        probs = torch.softmax(class_logits[i], dim=-1)  # (num_boxes, num_classes)
+        scores, labels = probs.max(dim=-1)  # Najlepsza klasa dla każdego boxa
+
+        # Wybieramy tylko te boxy, które mają score > threshold
+        keep = scores > conf_threshold
+        boxes = bbox_predictions[i][keep]
+        scores = scores[keep]
+        labels = labels[keep]
+
+        if len(boxes) > 0:
+            # Stosujemy Non-Maximum Suppression (NMS)
+            keep_idx = ops.nms(boxes, scores, iou_threshold)
+            boxes = boxes[keep_idx]
+            labels = labels[keep_idx]
+
+        final_boxes.append(boxes)
+        final_labels.append(labels)
+
+    return final_boxes, final_labels
 
 
 def inner_main(
-    image_size: int = typer.Option(640, help=""),
+    dataset_path: Path = typer.Argument(..., help=""),
+    image_size: int = typer.Option(400, help=""),
     epochs: int = typer.Option(10, help=""),
     batch_size: int = typer.Option(32, help=""),
     num_classes: int = typer.Option(3, help=""),
+    num_boxes: int = typer.Option(10, help=""),
 ) -> None:
-    detector = CustomDetector(num_classes=num_classes, image_size=image_size, epochs=epochs, batch_size=batch_size)
-    detector.train()
-    detector.eval()
+    class_names = ["Class 0", "Class 1", "Class 2"]
+    trainer = ObjectDetectorTrainer(
+        image_size=image_size,
+        batch_size=batch_size,
+        num_classes=num_classes,
+        num_boxes=num_boxes,
+        dataset_path=dataset_path,
+    )
+    trainer.train_and_validate(epochs=epochs)
+
+    test_model_on_images(trainer.model, trainer.test_dataloader, class_names, trainer.device, num_images=5)
 
 
 def main() -> None:

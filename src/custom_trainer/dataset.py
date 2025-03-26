@@ -31,10 +31,15 @@ class YoloDataset(Dataset):  # type: ignore[type-arg]
             for line in f.readlines():
                 parts = line.strip().split()
                 class_id = int(parts[0])
+                if class_id == 2:
+                    class_id = 1
                 x_center, y_center, width, height = map(float, parts[1:])
-                labels.append(
-                    [class_id, x_center - width / 2, y_center - height / 2, x_center + width / 2, y_center + height / 2]
-                )
+                x_min = max(0, x_center - width / 2)
+                y_min = max(0, y_center - height / 2)
+                x_max = min(1, x_center + width / 2)
+                y_max = min(1, y_center + height / 2)
+
+                labels.append([class_id, x_min, y_min, x_max, y_max])
 
         # Konwersja do tensora
         if self.transform:
