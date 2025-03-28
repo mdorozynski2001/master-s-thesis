@@ -1,3 +1,5 @@
+import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +22,7 @@ class DetectionLoss(nn.Module):
     def __init__(self, lambda_coord: float = 5.0, lambda_noobj: float = 0.5) -> None:
         super(DetectionLoss, self).__init__()
         self.bbox_loss = nn.SmoothL1Loss()
-        self.class_loss = nn.CrossEntropyLoss(ignore_index=0)
+        self.class_loss = nn.CrossEntropyLoss()
         self.lambda_coord = lambda_coord
         self.lambda_noobj = lambda_noobj
 
@@ -61,15 +63,30 @@ class Backbone(nn.Module):
 
         # Extract layers up to the final convolutional block
         self.feature_extractor = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),
-            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(64),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(64),
+            nn.LeakyReLU(0.1),
             nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(512),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(512),
+            nn.LeakyReLU(0.1),
         )
 
         # Optionally freeze some layers for transfer learning
@@ -100,17 +117,21 @@ class DetectionHead(nn.Module):
 
         self.num_boxes = num_boxes  # Maksymalna liczba obiektów do wykrycia
         self.fc_layers = nn.Sequential(
-            nn.Linear(in_channels, 512),
-            nn.ReLU(),
+            nn.Linear(in_channels, 1024),
+            nn.BatchNorm1d(1024),
+            nn.LeakyReLU(0.1),
             nn.Dropout(0.5),
+            nn.Linear(1024, 512),
+            nn.BatchNorm1d(512),
+            nn.LeakyReLU(0.1),
+            nn.Dropout(0.4),
             nn.Linear(512, 256),
-            nn.ReLU(),
-            nn.Linear(256, 128),
-            nn.ReLU(),
+            nn.BatchNorm1d(256),
+            nn.LeakyReLU(0.1),
         )
 
-        self.class_head = nn.Linear(128, num_boxes * num_classes)
-        self.bbox_head = nn.Linear(128, num_boxes * 4)
+        self.class_head = nn.Linear(256, num_boxes * num_classes)
+        self.bbox_head = nn.Linear(256, num_boxes * 4)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         x = self.flatten(x)
@@ -147,9 +168,10 @@ class ObjectDetectorTrainer:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = ObjectDetector(Backbone(), num_classes, num_boxes, image_size).to(self.device)
         self.epochs = epochs
-
-        self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
-        self.criterion = DetectionLoss().to(self.device)
+        self.num_classes = num_classes
+        self.num_boxes = num_boxes
+        self.image_size = image_size
+        self.batch_size = batch_size
 
         transform = transforms.Compose(
             [
@@ -178,6 +200,33 @@ class ObjectDetectorTrainer:
             dataset_path / Path("test/images"), dataset_path / Path("test/labels"), transform=transform
         )
         self.test_dataloader = DataLoader(self.test_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+        self.optimizer = optim.AdamW(self.model.parameters(), lr=0.001, weight_decay=1e-4)
+        self.scheduler = optim.lr_scheduler.OneCycleLR(
+            self.optimizer, max_lr=1e-3, steps_per_epoch=len(self.train_dataloader), epochs=self.epochs
+        )
+        self.criterion = DetectionLoss().to(self.device)
+
+        current_date = datetime.now()
+        formatted_date = current_date.strftime("%d_%m_%Y")
+        self.output_folder = Path(f"runs/detect/custom_model/train_{formatted_date}")
+
+        self.output_folder.mkdir(parents=True, exist_ok=True)
+
+    def save_model(self, final_save: bool = False) -> None:
+        torch.save(self.model.state_dict(), self.output_folder / "best.pt")
+
+        if final_save:
+            model_data = {
+                "num_classes": self.num_classes,
+                "image_size": self.image_size,
+                "epochs": self.epochs,
+                "batch_size": self.batch_size,
+                "num_boxes": self.num_boxes,
+            }
+            with open(self.output_folder / "summary.json", "w") as file:
+                json.dump(model_data, file, indent=4)
+
+            torch.save(self.model.state_dict(), self.output_folder / "last.pt")
 
     def train_model(self) -> float:
         self.model.train()
@@ -226,6 +275,7 @@ class ObjectDetectorTrainer:
 
             loss.backward()
             self.optimizer.step()
+            self.scheduler.step()
             total_loss += loss.item()
 
         return total_loss / len(self.train_dataloader)
@@ -280,11 +330,11 @@ class ObjectDetectorTrainer:
 
         return total_loss / len(dataloader)
 
-    def train_and_validate(self, val: bool = True, epochs: int = 10, patience: int = 5) -> None:
+    def train_and_validate(self, val: bool = True, patience: int = 5) -> None:
         best_val_loss = float("inf")
         patience_counter = 0
-        for epoch in range(epochs):
-            print(f"\nEpoch {epoch + 1}/{epochs}")
+        for epoch in range(self.epochs):
+            print(f"\nEpoch {epoch + 1}/{self.epochs}")
             train_loss = self.train_model()
             val_loss = self.validate_model(val)
 
@@ -293,7 +343,7 @@ class ObjectDetectorTrainer:
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 patience_counter = 0
-                torch.save(self.model.state_dict(), "best_model.pt")
+                self.save_model()
                 print("🔹 New best model saved!")
             else:
                 patience_counter += 1
@@ -304,6 +354,7 @@ class ObjectDetectorTrainer:
                 break
 
         print("Training complete!")
+        self.save_model(final_save=True)
 
 
 def run_inference(
@@ -344,7 +395,9 @@ def run_inference(
     return detections
 
 
-def visualize_detections(detections, class_names, num_images=5, conf_threshold=0.5):
+def visualize_detections(
+    detections: list[Any], class_names: list[str], num_images: int = 5, conf_threshold: float = 0.5
+) -> None:
     for i in range(min(num_images, len(detections))):
         image, boxes, labels, scores = detections[i]
         image = image.permute(1, 2, 0).cpu().numpy()
@@ -372,7 +425,9 @@ def visualize_detections(detections, class_names, num_images=5, conf_threshold=0
         plt.show()
 
 
-def test_model_on_images(model, dataloader, class_names, device, num_images=5):
+def test_model_on_images(
+    model: ObjectDetector, dataloader: DataLoader, class_names: list[str], device: torch.device, num_images: int = 5
+) -> None:
     detections = run_inference(model, dataloader, device)
     visualize_detections(detections, class_names, num_images)
 
@@ -416,12 +471,12 @@ def postprocess_detections(
 def inner_main(
     dataset_path: Path = typer.Argument(..., help=""),
     image_size: int = typer.Option(500, help=""),
-    epochs: int = typer.Option(300, help=""),
-    batch_size: int = typer.Option(64, help=""),
+    epochs: int = typer.Option(200, help=""),
+    batch_size: int = typer.Option(16, help=""),
     num_classes: int = typer.Option(2, help=""),
-    num_boxes: int = typer.Option(15, help=""),
-    train : bool = typer.Option(True, help=""),
-    model_path : Path = typer.Option(None, help="")
+    num_boxes: int = typer.Option(30, help=""),
+    train: bool = typer.Option(True, help=""),
+    model_path: Path = typer.Option(None, help=""),
 ) -> None:
     class_names = ["Class 0", "Class 1", "Class 2"]
     trainer = ObjectDetectorTrainer(
@@ -430,12 +485,13 @@ def inner_main(
         num_classes=num_classes,
         num_boxes=num_boxes,
         dataset_path=dataset_path,
+        epochs=epochs,
     )
     if train:
-        trainer.train_and_validate(epochs=epochs)
+        trainer.train_and_validate()
     else:
         trainer.model.load_state_dict(torch.load(model_path))
-        test_model_on_images(trainer.model, trainer.test_dataloader, class_names, trainer.device, num_images=5)
+        test_model_on_images(trainer.model, trainer.test_dataloader, class_names, trainer.device, num_images=100)
 
 
 def main() -> None:
