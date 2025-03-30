@@ -22,7 +22,7 @@ class DetectionLoss(nn.Module):
     def __init__(self, lambda_coord: float = 5.0, lambda_noobj: float = 0.5) -> None:
         super(DetectionLoss, self).__init__()
         self.bbox_loss = nn.SmoothL1Loss()
-        self.class_loss = nn.CrossEntropyLoss()
+        self.class_loss = nn.CrossEntropyLoss(ignore_index=2)
         self.lambda_coord = lambda_coord
         self.lambda_noobj = lambda_noobj
 
@@ -33,35 +33,28 @@ class DetectionLoss(nn.Module):
         target_bboxes: torch.Tensor,
         target_classes: torch.Tensor,
     ) -> torch.Tensor:
-        """
-        pred_bboxes: (batch, num_boxes, 4)
-        pred_classes: (batch, num_boxes, num_classes)
-        target_bboxes: (batch, num_boxes, 4)
-        target_classes: (batch, num_boxes)
-        """
-
-        # 🛑 Dopasowanie wymiarów target_bboxes do pred_bboxes
         batch_size = pred_bboxes.shape[0]
         if target_bboxes.shape[0] != batch_size:
             target_bboxes = target_bboxes[:batch_size]
             target_classes = target_classes[:batch_size]
 
-        # 🛑 Zabezpieczenie przed pustymi tensorami
         if target_bboxes.numel() == 0 or target_classes.numel() == 0:
             return torch.tensor(0.0, device=pred_bboxes.device, requires_grad=True)
 
-        # Obliczamy straty
         bbox_loss = self.lambda_coord * self.bbox_loss(pred_bboxes, target_bboxes)
+        target_classes = torch.clamp(target_classes, max=pred_classes.shape[-1] - 1)
         class_loss = self.class_loss(pred_classes.permute(0, 2, 1), target_classes)
 
-        return bbox_loss + class_loss
+        pred_probs = torch.softmax(pred_classes, dim=-1)
+        noobj_loss = self.lambda_noobj * torch.mean((target_classes == 0).float() * pred_probs[..., 0])
+
+        return bbox_loss + class_loss + noobj_loss
 
 
 class Backbone(nn.Module):
     def __init__(self, trainable_layers: int = 3) -> None:
         super(Backbone, self).__init__()
 
-        # Extract layers up to the final convolutional block
         self.feature_extractor = nn.Sequential(
             nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(64),
@@ -87,9 +80,20 @@ class Backbone(nn.Module):
             nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(512),
             nn.LeakyReLU(0.1),
+            nn.Conv2d(512, 1024, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(1024),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(1024, 1024, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(1024),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(1024, 2048, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(2048),
+            nn.LeakyReLU(0.1),
+            nn.Conv2d(2048, 2048, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(2048),
+            nn.LeakyReLU(0.1),
         )
 
-        # Optionally freeze some layers for transfer learning
         layers_to_freeze = len(list(self.feature_extractor.children())) - trainable_layers
         for i, layer in enumerate(self.feature_extractor.children()):
             if i < layers_to_freeze:
@@ -115,29 +119,26 @@ class DetectionHead(nn.Module):
         super(DetectionHead, self).__init__()
         self.flatten = nn.Flatten()
 
-        self.num_boxes = num_boxes  # Maksymalna liczba obiektów do wykrycia
+        self.num_boxes = num_boxes
         self.fc_layers = nn.Sequential(
             nn.Linear(in_channels, 1024),
             nn.BatchNorm1d(1024),
             nn.LeakyReLU(0.1),
-            nn.Dropout(0.5),
+            nn.Dropout(0.4),
             nn.Linear(1024, 512),
             nn.BatchNorm1d(512),
             nn.LeakyReLU(0.1),
-            nn.Dropout(0.4),
-            nn.Linear(512, 256),
-            nn.BatchNorm1d(256),
-            nn.LeakyReLU(0.1),
         )
 
-        self.class_head = nn.Linear(256, num_boxes * num_classes)
-        self.bbox_head = nn.Linear(256, num_boxes * 4)
+        self.class_head = nn.Sequential(nn.Linear(512, num_boxes * num_classes), nn.Sigmoid())
+        self.bbox_head = nn.Linear(512, num_boxes * 4)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         x = self.flatten(x)
         x = self.fc_layers(x)
-        bbox_predictions = torch.sigmoid(self.bbox_head(x)).view(-1, self.num_boxes, 4)  # 🛑 Sigmoid -> [0,1]
-        class_logits = self.class_head(x).view(-1, self.num_boxes, self.class_head.out_features // self.num_boxes)
+        bbox_predictions = torch.sigmoid(self.bbox_head(x)).view(-1, self.num_boxes, 4)
+        num_classes = self.class_head[0].out_features // self.num_boxes
+        class_logits = self.class_head(x).view(-1, self.num_boxes, num_classes)
         return bbox_predictions, class_logits
 
 
@@ -206,12 +207,6 @@ class ObjectDetectorTrainer:
         )
         self.criterion = DetectionLoss().to(self.device)
 
-        current_date = datetime.now()
-        formatted_date = current_date.strftime("%d_%m_%Y")
-        self.output_folder = Path(f"runs/detect/custom_model/train_{formatted_date}")
-
-        self.output_folder.mkdir(parents=True, exist_ok=True)
-
     def save_model(self, final_save: bool = False) -> None:
         torch.save(self.model.state_dict(), self.output_folder / "best.pt")
 
@@ -248,7 +243,6 @@ class ObjectDetectorTrainer:
             num_boxes = self.model.detection_head.num_boxes
             batch_size = images.shape[0]
 
-            # Dopasowanie wymiarów
             target_bboxes = torch.stack(
                 [
                     torch.cat([t, torch.zeros(max(0, num_boxes - t.shape[0]), 4, device=self.device)])
@@ -258,7 +252,7 @@ class ObjectDetectorTrainer:
             target_classes = torch.stack(
                 [
                     torch.cat(
-                        [t, torch.full((max(0, num_boxes - t.shape[0]),), 0, dtype=torch.long, device=self.device)]
+                        [t, torch.full((max(0, num_boxes - t.shape[0]),), 2, dtype=torch.long, device=self.device)]
                     )
                     for t in target_classes_list
                 ]
@@ -331,6 +325,11 @@ class ObjectDetectorTrainer:
         return total_loss / len(dataloader)
 
     def train_and_validate(self, val: bool = True, patience: int = 5) -> None:
+        current_date = datetime.now()
+        formatted_date = current_date.strftime("%d_%m_%Y")
+        self.output_folder = Path(f"runs/detect/custom_model/train_{formatted_date}")
+        self.output_folder.mkdir(parents=True, exist_ok=True)
+
         best_val_loss = float("inf")
         patience_counter = 0
         for epoch in range(self.epochs):
@@ -373,17 +372,14 @@ def run_inference(
             pred_bboxes, pred_classes = model(images)
 
             for i in range(len(images)):
-                # Softmax dla klas i wybór najlepszej
                 probs = torch.softmax(pred_classes[i], dim=-1)
                 scores, labels = probs.max(dim=-1)
 
-                # Filtrowanie bboxów na podstawie confidence threshold
                 keep = scores > conf_threshold
                 boxes = pred_bboxes[i][keep]
                 scores = scores[keep]
                 labels = labels[keep]
 
-                # Non-Maximum Suppression (NMS)
                 if len(boxes) > 0:
                     keep_idx = ops.nms(boxes, scores, iou_threshold)
                     boxes = boxes[keep_idx]
@@ -407,7 +403,7 @@ def visualize_detections(
         h, w, _ = image.shape
         for box, label, score in zip(boxes, labels, scores):
             if score < conf_threshold:
-                continue  # 🛑 Filtrujemy bboxy z niskim score
+                continue
 
             x1, y1, x2, y2 = box.tolist()
             x1 = int(x1 * w)
@@ -435,29 +431,20 @@ def test_model_on_images(
 def postprocess_detections(
     bbox_predictions: torch.Tensor, class_logits: torch.Tensor, conf_threshold: float = 0.5, iou_threshold: float = 0.3
 ) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
-    """
-    Przetwarza wyniki detekcji, odfiltrowując niskie prawdopodobieństwa i nakładające się obiekty.
-
-    bbox_predictions: (batch_size, num_boxes, 4)
-    class_logits: (batch_size, num_boxes, num_classes)
-    """
     batch_size, num_boxes, _ = bbox_predictions.shape
     final_boxes = []
     final_labels = []
 
     for i in range(batch_size):
-        # Obliczamy prawdopodobieństwa klas
-        probs = torch.softmax(class_logits[i], dim=-1)  # (num_boxes, num_classes)
-        scores, labels = probs.max(dim=-1)  # Najlepsza klasa dla każdego boxa
+        probs = torch.softmax(class_logits[i], dim=-1)
+        scores, labels = probs.max(dim=-1)
 
-        # Wybieramy tylko te boxy, które mają score > threshold
         keep = scores > conf_threshold
         boxes = bbox_predictions[i][keep]
         scores = scores[keep]
         labels = labels[keep]
 
         if len(boxes) > 0:
-            # Stosujemy Non-Maximum Suppression (NMS)
             keep_idx = ops.nms(boxes, scores, iou_threshold)
             boxes = boxes[keep_idx]
             labels = labels[keep_idx]
@@ -470,10 +457,10 @@ def postprocess_detections(
 
 def inner_main(
     dataset_path: Path = typer.Argument(..., help=""),
-    image_size: int = typer.Option(500, help=""),
+    image_size: int = typer.Option(300, help=""),
     epochs: int = typer.Option(200, help=""),
-    batch_size: int = typer.Option(16, help=""),
-    num_classes: int = typer.Option(2, help=""),
+    batch_size: int = typer.Option(64, help=""),
+    num_classes: int = typer.Option(3, help=""),
     num_boxes: int = typer.Option(30, help=""),
     train: bool = typer.Option(True, help=""),
     model_path: Path = typer.Option(None, help=""),
