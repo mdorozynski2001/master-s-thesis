@@ -11,14 +11,14 @@ from yolo_trainer.pre_train.utils import create_yaml
 
 def inner_main(
     train_json_path: Path = typer.Argument(..., exists=True, file_okay=True, dir_okay=False, help=""),
-    output_dir : Path = typer.Option(None,file_okay=False,dir_okay=True, help=""),
+    output_dir: Path = typer.Option(None, file_okay=False, dir_okay=True, help=""),
 ) -> None:
     with open(train_json_path, "r") as file:
         train_data = json.load(file)
 
     current_datetime = datetime.now()
     if output_dir is None:
-        formatted_date = current_datetime.strftime("%Y_%m_%d_%H_%M")
+        formatted_date = current_datetime.strftime("%Y_%m_%d_%H_%M")  # type: ignore[unreachable]
         output_dir = DATASETS_DIR / f"yolo_data_{formatted_date}"
     else:
         output_dir = WORKDIR / output_dir

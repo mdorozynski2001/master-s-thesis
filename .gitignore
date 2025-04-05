@@ -2,3 +2,6 @@ datasets/
 runs/
 *.pyc
 .cache/
+images/
+labels/
+*.cache
