@@ -33,20 +33,21 @@ class DetectionLoss(nn.Module):
         target_bboxes: torch.Tensor,
         target_classes: torch.Tensor,
     ) -> torch.Tensor:
-        batch_size = pred_bboxes.shape[0]
-        if target_bboxes.shape[0] != batch_size:
-            target_bboxes = target_bboxes[:batch_size]
-            target_classes = target_classes[:batch_size]
-
         if target_bboxes.numel() == 0 or target_classes.numel() == 0:
             return torch.tensor(0.0, device=pred_bboxes.device, requires_grad=True)
 
-        bbox_loss = self.lambda_coord * self.bbox_loss(pred_bboxes, target_bboxes)
-        target_classes = torch.clamp(target_classes, max=pred_classes.shape[-1] - 1)
-        class_loss = self.class_loss(pred_classes.permute(0, 2, 1), target_classes)
+        bbox_mask = (target_classes != 2).unsqueeze(-1)
+        bbox_loss = self.lambda_coord * self.bbox_loss(
+            pred_bboxes[bbox_mask.expand_as(pred_bboxes)], target_bboxes[bbox_mask.expand_as(target_bboxes)]
+        )
 
-        pred_probs = torch.softmax(pred_classes, dim=-1)
-        noobj_loss = self.lambda_noobj * torch.mean((target_classes == 0).float() * pred_probs[..., 0])
+        pred_classes = pred_classes.permute(0, 2, 1)
+        class_loss = self.class_loss(pred_classes, target_classes)
+
+        pred_probs = torch.softmax(pred_classes.permute(0, 2, 1), dim=-1)
+        noobj_mask = target_classes == 2
+        bg_probs = pred_probs[..., 0]
+        noobj_loss = self.lambda_noobj * torch.mean(noobj_mask.float() * bg_probs)
 
         return bbox_loss + class_loss + noobj_loss
 
@@ -56,7 +57,7 @@ class Backbone(nn.Module):
         super(Backbone, self).__init__()
 
         self.feature_extractor = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(64),
             nn.LeakyReLU(0.1),
             nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1),
@@ -105,7 +106,7 @@ class Backbone(nn.Module):
 
 
 def calculate_linear_input(image_size: int, feature_extractor: Backbone) -> int:
-    dummy_input = torch.randn(1, 3, image_size, image_size)
+    dummy_input = torch.randn(1, 1, image_size, image_size)
 
     feature_map = feature_extractor(dummy_input)
 
@@ -121,17 +122,17 @@ class DetectionHead(nn.Module):
 
         self.num_boxes = num_boxes
         self.fc_layers = nn.Sequential(
-            nn.Linear(in_channels, 1024),
-            nn.BatchNorm1d(1024),
-            nn.LeakyReLU(0.1),
-            nn.Dropout(0.4),
-            nn.Linear(1024, 512),
+            nn.Linear(in_channels, 512),
             nn.BatchNorm1d(512),
-            nn.LeakyReLU(0.1),
+            nn.LeakyReLU(),
+            nn.Dropout(),
+            nn.Linear(512, 256),
+            nn.BatchNorm1d(256),
+            nn.LeakyReLU(),
         )
 
-        self.class_head = nn.Sequential(nn.Linear(512, num_boxes * num_classes), nn.Sigmoid())
-        self.bbox_head = nn.Linear(512, num_boxes * 4)
+        self.class_head = nn.Sequential(nn.Linear(256, num_boxes * num_classes), nn.Sigmoid())
+        self.bbox_head = nn.Linear(256, num_boxes * 4)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         x = self.flatten(x)
@@ -177,6 +178,7 @@ class ObjectDetectorTrainer:
         transform = transforms.Compose(
             [
                 transforms.Resize((image_size, image_size)),
+                transforms.Grayscale(num_output_channels=1),
                 transforms.ToTensor(),
             ]
         )
@@ -307,7 +309,7 @@ class ObjectDetectorTrainer:
                 target_classes = torch.stack(
                     [
                         torch.cat(
-                            [t, torch.full((max(0, num_boxes - t.shape[0]),), 0, dtype=torch.long, device=self.device)]
+                            [t, torch.full((max(0, num_boxes - t.shape[0]),), 2, dtype=torch.long, device=self.device)]
                         )
                         for t in target_classes
                     ]
@@ -324,7 +326,8 @@ class ObjectDetectorTrainer:
 
         return total_loss / len(dataloader)
 
-    def train_and_validate(self, val: bool = True, patience: int = 5) -> None:
+    def train_and_validate(self, val: bool = True) -> None:
+        patience = max(5, int(self.epochs * (0.1)))
         current_date = datetime.now()
         formatted_date = current_date.strftime("%d_%m_%Y")
         self.output_folder = Path(f"runs/detect/custom_model/train_{formatted_date}")
@@ -392,7 +395,7 @@ def run_inference(
 
 
 def visualize_detections(
-    detections: list[Any], class_names: list[str], num_images: int = 5, conf_threshold: float = 0.5
+    detections: list[Any], class_names: list[str], num_images: int = 5, conf_threshold: float = 0.2
 ) -> None:
     for i in range(min(num_images, len(detections))):
         image, boxes, labels, scores = detections[i]
@@ -416,7 +419,7 @@ def visualize_detections(
             cv2.putText(image, f"{label_name} {score:.2f}", (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         plt.figure(figsize=(8, 8))
-        plt.imshow(image)
+        plt.imshow(image, cmap="gray")
         plt.axis("off")
         plt.show()
 
@@ -457,7 +460,7 @@ def postprocess_detections(
 
 def inner_main(
     dataset_path: Path = typer.Argument(..., help=""),
-    image_size: int = typer.Option(300, help=""),
+    image_size: int = typer.Option(600, help=""),
     epochs: int = typer.Option(200, help=""),
     batch_size: int = typer.Option(64, help=""),
     num_classes: int = typer.Option(3, help=""),
