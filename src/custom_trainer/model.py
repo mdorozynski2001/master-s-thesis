@@ -1,5 +1,5 @@
+import csv
 import json
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +10,7 @@ import torch
 import torch.optim as optim
 import torchvision.ops as ops  # type: ignore[import-untyped]
 import typer
+from sklearn.metrics import f1_score, precision_score, recall_score
 from torch import nn
 from torch.utils.data import DataLoader
 from torchvision import transforms
@@ -37,12 +38,12 @@ class DetectionLoss(nn.Module):
             return torch.tensor(0.0, device=pred_bboxes.device, requires_grad=True)
 
         bbox_mask = (target_classes != 2).unsqueeze(-1)
-        bbox_loss = self.lambda_coord * self.bbox_loss(
+        bbox_loss: torch.Tensor = self.lambda_coord * self.bbox_loss(
             pred_bboxes[bbox_mask.expand_as(pred_bboxes)], target_bboxes[bbox_mask.expand_as(target_bboxes)]
         )
 
         pred_classes = pred_classes.permute(0, 2, 1)
-        class_loss = self.class_loss(pred_classes, target_classes)
+        class_loss: torch.Tensor = self.class_loss(pred_classes, target_classes)
 
         pred_probs = torch.softmax(pred_classes.permute(0, 2, 1), dim=-1)
         noobj_mask = target_classes == 2
@@ -102,7 +103,8 @@ class Backbone(nn.Module):
                     param.requires_grad = False
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.feature_extractor(x)
+        features: torch.Tensor = self.feature_extractor(x)
+        return features
 
 
 def calculate_linear_input(image_size: int, feature_extractor: Backbone) -> int:
@@ -161,11 +163,11 @@ class ObjectDetectorTrainer:
     def __init__(
         self,
         dataset_path: Path,
-        num_classes: int = 2,
-        image_size: int = 350,
-        epochs: int = 10,
-        batch_size: int = 32,
-        num_boxes: int = 10,
+        num_classes: int = 3,
+        image_size: int = 600,
+        epochs: int = 200,
+        batch_size: int = 64,
+        num_boxes: int = 30,
     ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = ObjectDetector(Backbone(), num_classes, num_boxes, image_size).to(self.device)
@@ -223,8 +225,6 @@ class ObjectDetectorTrainer:
             with open(self.output_folder / "summary.json", "w") as file:
                 json.dump(model_data, file, indent=4)
 
-            torch.save(self.model.state_dict(), self.output_folder / "last.pt")
-
     def train_model(self) -> float:
         self.model.train()
         total_loss = 0.0
@@ -281,8 +281,11 @@ class ObjectDetectorTrainer:
             dataloader = self.val_dataloader
         else:
             dataloader = self.train_dataloader
+
         self.model.eval()
         total_loss = 0.0
+        all_preds = []
+        all_targets = []
 
         with torch.no_grad():
             for images, targets in tqdm(dataloader, desc="Validation"):
@@ -315,48 +318,88 @@ class ObjectDetectorTrainer:
                     ]
                 )[:batch_size]
 
-                pred_bboxes, pred_classes = self.model(images)
+                pred_bboxes, class_logits = self.model(images)
+                pred_classes = torch.argmax(class_logits, dim=-1)
 
-                loss = self.criterion(pred_bboxes, pred_classes, target_bboxes, target_classes)
+                loss = self.criterion(pred_bboxes, class_logits, target_bboxes, target_classes)
 
                 if torch.isnan(loss):
                     continue
 
                 total_loss += loss.item()
 
+                all_preds.extend(pred_classes.view(-1).cpu().tolist())
+                all_targets.extend(target_classes.view(-1).cpu().tolist())
+
+        self.precision = precision_score(all_targets, all_preds, average="macro", zero_division=0)
+        self.recall = recall_score(all_targets, all_preds, average="macro", zero_division=0)
+        self.f1 = f1_score(all_targets, all_preds, average="macro", zero_division=0)
+
+        print(f"Precision: {self.precision:.4f} | Recall: {self.recall:.4f} | F1: {self.f1:.4f}")
+
+        if not val:
+            with open(self.output_folder / "test_results.json", mode="w") as file:
+                data = {
+                    "precision": self.precision,
+                    "recall": self.recall,
+                    "f1": self.f1,
+                    "loss": total_loss / len(dataloader),
+                }
+                json.dump(data, file, indent=4)
+
         return total_loss / len(dataloader)
 
     def train_and_validate(self, val: bool = True) -> None:
         patience = max(5, int(self.epochs * (0.1)))
-        current_date = datetime.now()
-        formatted_date = current_date.strftime("%d_%m_%Y")
-        self.output_folder = Path(f"runs/detect/custom_model/train_{formatted_date}")
+        output_folder_template = Path("runs/detect/custom_model/train")
+        self.output_folder = output_folder_template
+        i = 2
+        while self.output_folder.exists():
+            self.output_folder = output_folder_template.parent / f"{output_folder_template.name}_{i}"
+            i += 1
+
         self.output_folder.mkdir(parents=True, exist_ok=True)
 
-        best_val_loss = float("inf")
-        patience_counter = 0
-        for epoch in range(self.epochs):
-            print(f"\nEpoch {epoch + 1}/{self.epochs}")
-            train_loss = self.train_model()
-            val_loss = self.validate_model(val)
+        self.metrics_csv_file = self.output_folder / "train_metrics.csv"
 
-            print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+        with open(self.metrics_csv_file, mode="w") as file:
+            writer = csv.writer(file)
+            writer.writerow(["epoch", "recall", "precision", "f1", "train_loss", "val_loss"])
 
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                patience_counter = 0
-                self.save_model()
-                print("🔹 New best model saved!")
-            else:
-                patience_counter += 1
-                print(f"🔸 No improvement ({patience_counter}/{patience})")
+            best_val_loss = float("inf")
+            patience_counter = 0
+            for epoch in range(self.epochs):
+                print(f"\nEpoch {epoch + 1}/{self.epochs}")
+                train_loss = self.train_model()
+                val_loss = self.validate_model(val)
+                writer.writerow(
+                    [
+                        epoch,
+                        round(self.recall, 4),
+                        round(self.precision, 4),
+                        round(self.f1, 4),
+                        round(train_loss, 4),
+                        round(val_loss, 4),
+                    ]
+                )
 
-            if patience_counter >= patience:
-                print("🛑 Early stopping triggered.")
-                break
+                print(f"Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
 
-        print("Training complete!")
-        self.save_model(final_save=True)
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    patience_counter = 0
+                    self.save_model()
+                    print("🔹 New best model saved!")
+                else:
+                    patience_counter += 1
+                    print(f"🔸 No improvement ({patience_counter}/{patience})")
+
+                if patience_counter >= patience:
+                    print("🛑 Early stopping triggered.")
+                    break
+
+            print("Training complete!")
+            self.save_model(final_save=True)
 
 
 def run_inference(

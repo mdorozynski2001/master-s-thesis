@@ -6,6 +6,7 @@ authors = ["Marcin Dorożyński <259295@student.pwr.edu.pl>"]
 readme = "README.md"
 packages = [
     { include = "yolo_trainer", from = "src" },
+    { include = "custom_trainer", from = "src" },
 ]
 
 [tool.poetry.scripts]
@@ -16,6 +17,8 @@ compare_models = "yolo_trainer.post_train.compare_models:main"
 remove_symlinks = "yolo_trainer.remove_symlinks:main"
 init_datasets = "yolo_trainer.pre_train.init_datasets:main"
 create_yolo_yamls = "yolo_trainer.pre_train.create_yolo_yamls:main"
+train_custom = "custom_trainer.train_custom_model:main"
+eval_custom = "custom_trainer.evaluate_custom_model:main"
 
 [tool.poetry.dependencies]
 python = "^3.10"
@@ -23,6 +26,7 @@ ultralytics = "^8.3.49"
 typer = "^0.15.1"
 munch = "^4.0.0"
 plotly = "^5.24.1"
+scikit-learn = "^1.6.1"
 
 [tool.poetry.group.test.dependencies]
 black = "^24.10.0"
