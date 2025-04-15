@@ -20,37 +20,49 @@ from custom_trainer.dataset import YoloDataset
 
 
 class DetectionLoss(nn.Module):
-    def __init__(self, lambda_coord: float = 5.0, lambda_noobj: float = 0.5) -> None:
+    def __init__(self, lambda_coord: float = 5.0, lambda_noobj: float = 0.5, lambda_conf: float = 1.0) -> None:
         super(DetectionLoss, self).__init__()
         self.bbox_loss = nn.SmoothL1Loss()
         self.class_loss = nn.CrossEntropyLoss(ignore_index=2)
+        self.conf_loss = nn.BCELoss()
         self.lambda_coord = lambda_coord
         self.lambda_noobj = lambda_noobj
+        self.lambda_conf = lambda_conf
 
     def forward(
         self,
         pred_bboxes: torch.Tensor,
         pred_classes: torch.Tensor,
+        confidences: torch.Tensor,
         target_bboxes: torch.Tensor,
         target_classes: torch.Tensor,
     ) -> torch.Tensor:
         if target_bboxes.numel() == 0 or target_classes.numel() == 0:
             return torch.tensor(0.0, device=pred_bboxes.device, requires_grad=True)
 
+        # Bounding box loss for objects
         bbox_mask = (target_classes != 2).unsqueeze(-1)
         bbox_loss: torch.Tensor = self.lambda_coord * self.bbox_loss(
             pred_bboxes[bbox_mask.expand_as(pred_bboxes)], target_bboxes[bbox_mask.expand_as(target_bboxes)]
         )
 
+        # Classification loss
         pred_classes = pred_classes.permute(0, 2, 1)
         class_loss: torch.Tensor = self.class_loss(pred_classes, target_classes)
 
+        # Confidence loss
+        # For objects (target_classes != 2), confidence should be high
+        # For background (target_classes == 2), confidence should be low
+        obj_mask = (target_classes != 2).float()
+        conf_loss = self.lambda_conf * self.conf_loss(confidences.squeeze(-1), obj_mask)
+
+        # Background loss (no object loss)
         pred_probs = torch.softmax(pred_classes.permute(0, 2, 1), dim=-1)
         noobj_mask = target_classes == 2
         bg_probs = pred_probs[..., 0]
         noobj_loss = self.lambda_noobj * torch.mean(noobj_mask.float() * bg_probs)
 
-        return bbox_loss + class_loss + noobj_loss
+        return bbox_loss + class_loss + noobj_loss + conf_loss
 
 
 class Backbone(nn.Module):
@@ -58,41 +70,25 @@ class Backbone(nn.Module):
         super(Backbone, self).__init__()
 
         self.feature_extractor = nn.Sequential(
-            nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1),
+            # First block - input 600x600x1 -> 300x300x32
+            nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(32),
+            nn.LeakyReLU(0.1),
+            # Second block - 300x300x32 -> 150x150x64
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(64),
             nn.LeakyReLU(0.1),
-            nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(64),
-            nn.LeakyReLU(0.1),
-            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+            # Third block - 150x150x64 -> 75x75x128
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(128),
             nn.LeakyReLU(0.1),
-            nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(128),
-            nn.LeakyReLU(0.1),
-            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
+            # Fourth block - 75x75x128 -> 38x38x256
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(256),
             nn.LeakyReLU(0.1),
-            nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(256),
-            nn.LeakyReLU(0.1),
-            nn.Conv2d(256, 512, kernel_size=3, stride=1, padding=1),
+            # Fifth block - 38x38x256 -> 19x19x512
+            nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(512),
-            nn.LeakyReLU(0.1),
-            nn.Conv2d(512, 512, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(512),
-            nn.LeakyReLU(0.1),
-            nn.Conv2d(512, 1024, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(1024),
-            nn.LeakyReLU(0.1),
-            nn.Conv2d(1024, 1024, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(1024),
-            nn.LeakyReLU(0.1),
-            nn.Conv2d(1024, 2048, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(2048),
-            nn.LeakyReLU(0.1),
-            nn.Conv2d(2048, 2048, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(2048),
             nn.LeakyReLU(0.1),
         )
 
@@ -121,28 +117,76 @@ class DetectionHead(nn.Module):
     def __init__(self, in_channels: int, num_classes: int, num_boxes: int = 10) -> None:
         super(DetectionHead, self).__init__()
         self.flatten = nn.Flatten()
-
         self.num_boxes = num_boxes
+
+        # Enhanced feature extraction with residual connections
         self.fc_layers = nn.Sequential(
-            nn.Linear(in_channels, 512),
+            nn.Linear(in_channels, 1024),
+            nn.BatchNorm1d(1024),
+            nn.LeakyReLU(0.1),
+            nn.Dropout(0.3),
+            # Residual block 1
+            ResidualBlock(1024),
+            nn.Linear(1024, 512),
             nn.BatchNorm1d(512),
-            nn.LeakyReLU(),
-            nn.Dropout(),
-            nn.Linear(512, 256),
-            nn.BatchNorm1d(256),
-            nn.LeakyReLU(),
+            nn.LeakyReLU(0.1),
+            nn.Dropout(0.2),
+            # Residual block 2
+            ResidualBlock(512),
         )
 
-        self.class_head = nn.Sequential(nn.Linear(256, num_boxes * num_classes), nn.Sigmoid())
-        self.bbox_head = nn.Linear(256, num_boxes * 4)
+        # Separate heads for classification and bounding box prediction
+        self.class_head = nn.Sequential(
+            nn.Linear(512, 256),
+            nn.BatchNorm1d(256),
+            nn.LeakyReLU(0.1),
+            nn.Linear(256, num_boxes * num_classes),
+            nn.Sigmoid(),
+        )
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        self.bbox_head = nn.Sequential(
+            nn.Linear(512, 256), nn.BatchNorm1d(256), nn.LeakyReLU(0.1), nn.Linear(256, num_boxes * 4), nn.Sigmoid()
+        )
+
+        # Confidence head for objectness score
+        self.conf_head = nn.Sequential(
+            nn.Linear(512, 256), nn.BatchNorm1d(256), nn.LeakyReLU(0.1), nn.Linear(256, num_boxes), nn.Sigmoid()
+        )
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         x = self.flatten(x)
-        x = self.fc_layers(x)
-        bbox_predictions = torch.sigmoid(self.bbox_head(x)).view(-1, self.num_boxes, 4)
-        num_classes = self.class_head[0].out_features // self.num_boxes
-        class_logits = self.class_head(x).view(-1, self.num_boxes, num_classes)
-        return bbox_predictions, class_logits
+        features = self.fc_layers(x)
+
+        # Get predictions from each head
+        bbox_predictions = self.bbox_head(features).view(-1, self.num_boxes, 4)
+        num_classes = self.class_head[3].out_features // self.num_boxes
+        class_logits = self.class_head(features).view(-1, self.num_boxes, num_classes)
+        confidences = self.conf_head(features).view(-1, self.num_boxes, 1)
+
+        # Apply confidence to class logits
+        class_logits = class_logits * confidences
+
+        return bbox_predictions, class_logits, confidences
+
+
+class ResidualBlock(nn.Module):
+    def __init__(self, channels: int) -> None:
+        super(ResidualBlock, self).__init__()
+        self.block = nn.Sequential(
+            nn.Linear(channels, channels),
+            nn.BatchNorm1d(channels),
+            nn.LeakyReLU(0.1),
+            nn.Linear(channels, channels),
+            nn.BatchNorm1d(channels),
+        )
+        self.relu = nn.LeakyReLU(0.1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = x
+        out = self.block(x)
+        out += identity  # Residual connection
+        out = self.relu(out)
+        return out
 
 
 class ObjectDetector(nn.Module):
@@ -153,10 +197,10 @@ class ObjectDetector(nn.Module):
             in_channels=calculate_linear_input(image_size, backbone), num_classes=num_classes, num_boxes=num_boxes
         )
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         features = self.backbone(x)
-        bbox_predictions, class_logits = self.detection_head(features)
-        return bbox_predictions, class_logits
+        bbox_predictions, class_logits, confidences = self.detection_head(features)
+        return bbox_predictions, class_logits, confidences
 
 
 class ObjectDetectorTrainer:
@@ -261,9 +305,9 @@ class ObjectDetectorTrainer:
             )[:batch_size]
 
             self.optimizer.zero_grad()
-            pred_bboxes, pred_classes = self.model(images)
+            pred_bboxes, pred_classes, confidences = self.model(images)
 
-            loss = self.criterion(pred_bboxes, pred_classes, target_bboxes, target_classes)
+            loss = self.criterion(pred_bboxes, pred_classes, confidences, target_bboxes, target_classes)
             loss = torch.Tensor(loss)
 
             if torch.isnan(loss):
@@ -318,10 +362,10 @@ class ObjectDetectorTrainer:
                     ]
                 )[:batch_size]
 
-                pred_bboxes, class_logits = self.model(images)
+                pred_bboxes, class_logits, confidences = self.model(images)
                 pred_classes = torch.argmax(class_logits, dim=-1)
 
-                loss = self.criterion(pred_bboxes, class_logits, target_bboxes, target_classes)
+                loss = self.criterion(pred_bboxes, class_logits, confidences, target_bboxes, target_classes)
 
                 if torch.isnan(loss):
                     continue
@@ -408,31 +452,36 @@ def run_inference(
     device: torch.device,
     conf_threshold: float = 0.5,
     iou_threshold: float = 0.3,
-) -> list[tuple[Any, Any, torch.Tensor, torch.Tensor]]:
+) -> list[tuple[Any, Any, torch.Tensor, torch.Tensor, torch.Tensor]]:
     model.eval()
     detections = []
 
     with torch.no_grad():
         for images, _ in tqdm(dataloader, desc="Running Inference"):
             images = images.to(device)
-            pred_bboxes, pred_classes = model(images)
+            pred_bboxes, pred_classes, confidences = model(images)
 
             for i in range(len(images)):
+                # Get class probabilities
                 probs = torch.softmax(pred_classes[i], dim=-1)
                 scores, labels = probs.max(dim=-1)
 
+                # Apply confidence threshold
                 keep = scores > conf_threshold
                 boxes = pred_bboxes[i][keep]
                 scores = scores[keep]
                 labels = labels[keep]
+                confs = confidences[i][keep]
 
                 if len(boxes) > 0:
+                    # Apply NMS
                     keep_idx = ops.nms(boxes, scores, iou_threshold)
                     boxes = boxes[keep_idx]
                     scores = scores[keep_idx]
                     labels = labels[keep_idx]
+                    confs = confs[keep_idx]
 
-                detections.append((images[i].cpu(), boxes.cpu(), labels.cpu(), scores.cpu()))
+                detections.append((images[i].cpu(), boxes.cpu(), labels.cpu(), scores.cpu(), confs.cpu()))
 
     return detections
 
@@ -441,13 +490,17 @@ def visualize_detections(
     detections: list[Any], class_names: list[str], num_images: int = 5, conf_threshold: float = 0.2
 ) -> None:
     for i in range(min(num_images, len(detections))):
-        image, boxes, labels, scores = detections[i]
-        image = image.permute(1, 2, 0).cpu().numpy()
+        image, boxes, labels, scores, confidences = detections[i]
+        # Handle grayscale image (1 channel)
+        image = image.squeeze(0).cpu().numpy()  # Remove channel dimension
         image = (image * 255).astype("uint8")
         image = np.ascontiguousarray(image)
 
-        h, w, _ = image.shape
-        for box, label, score in zip(boxes, labels, scores):
+        # Convert to RGB for visualization
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+
+        h, w = image.shape  # Now shape is (H, W) for grayscale
+        for box, label, score, conf in zip(boxes, labels, scores, confidences):
             if score < conf_threshold:
                 continue
 
@@ -458,11 +511,19 @@ def visualize_detections(
             y2 = int(y2 * h)
 
             label_name = class_names[label] if label < len(class_names) else f"Class {label}"
-            cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(image, f"{label_name} {score:.2f}", (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            cv2.rectangle(image_rgb, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(
+                image_rgb,
+                f"{label_name} {score:.2f} (conf: {conf.item():.2f})",
+                (x1, y1 - 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 255, 0),
+                2,
+            )
 
         plt.figure(figsize=(8, 8))
-        plt.imshow(image, cmap="gray")
+        plt.imshow(image_rgb)
         plt.axis("off")
         plt.show()
 
@@ -472,33 +533,6 @@ def test_model_on_images(
 ) -> None:
     detections = run_inference(model, dataloader, device)
     visualize_detections(detections, class_names, num_images)
-
-
-def postprocess_detections(
-    bbox_predictions: torch.Tensor, class_logits: torch.Tensor, conf_threshold: float = 0.5, iou_threshold: float = 0.3
-) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
-    batch_size, num_boxes, _ = bbox_predictions.shape
-    final_boxes = []
-    final_labels = []
-
-    for i in range(batch_size):
-        probs = torch.softmax(class_logits[i], dim=-1)
-        scores, labels = probs.max(dim=-1)
-
-        keep = scores > conf_threshold
-        boxes = bbox_predictions[i][keep]
-        scores = scores[keep]
-        labels = labels[keep]
-
-        if len(boxes) > 0:
-            keep_idx = ops.nms(boxes, scores, iou_threshold)
-            boxes = boxes[keep_idx]
-            labels = labels[keep_idx]
-
-        final_boxes.append(boxes)
-        final_labels.append(labels)
-
-    return final_boxes, final_labels
 
 
 def inner_main(

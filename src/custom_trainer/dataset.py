@@ -40,6 +40,8 @@ class YoloDataset(Dataset):  # type: ignore[type-arg]
                 y_max = min(1, y_center + height / 2)
 
                 labels.append([class_id, x_min, y_min, x_max, y_max])
+        if len(labels) == 0:
+            labels.append([2, 0, 0, 0, 0])
 
         # Konwersja do tensora
         if self.transform:
