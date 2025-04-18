@@ -25,8 +25,8 @@ class DetectionLoss(nn.Module):
         lambda_coord: float = 5.0,
         lambda_noobj: float = 0.5,
         lambda_conf: float = 1.0,
-        lambda_iou: float = 3.0,
-        lambda_metrics: float = 5.0,
+        lambda_iou: float = 2.0,
+        lambda_metrics: float = 3.0,
     ) -> None:
         super(DetectionLoss, self).__init__()
         self.bbox_loss = nn.SmoothL1Loss()
@@ -286,8 +286,8 @@ class ObjectDetectorTrainer:
         lambda_coord: float = 5.0,
         lambda_noobj: float = 0.5,
         lambda_conf: float = 1.0,
-        lambda_iou: float = 3.0,
-        lambda_metrics: float = 5.0,
+        lambda_iou: float = 2.0,
+        lambda_metrics: float = 3.0,
     ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = ObjectDetector(Backbone(trainable_layers), num_classes, num_boxes, image_size).to(self.device)
@@ -672,8 +672,8 @@ def inner_main(
     lambda_coord: float = typer.Option(5.0, help="lambda coord"),
     lambda_noobj: float = typer.Option(0.5, help="lambda noobj"),
     lambda_conf: float = typer.Option(1.0, help="lambda conf"),
-    lambda_iou: float = typer.Option(3.0, help="lambda iou"),
-    lambda_metrics: float = typer.Option(5.0, help="lambda metrics"),
+    lambda_iou: float = typer.Option(2.0, help="lambda iou"),
+    lambda_metrics: float = typer.Option(3.0, help="lambda metrics"),
 ) -> None:
     class_names = ["Class 0", "Class 1", "Class 2"]
     trainer = ObjectDetectorTrainer(
@@ -694,7 +694,7 @@ def inner_main(
         trainer.train_and_validate()
     else:
         trainer.model.load_state_dict(torch.load(model_path))
-        test_model_on_images(trainer.model, trainer.test_dataloader, class_names, trainer.device, num_images=100)
+        test_model_on_images(trainer.model, trainer.test_dataloader, class_names, trainer.device, num_images=20)
 
 
 def main() -> None:

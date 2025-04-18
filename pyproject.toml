@@ -19,6 +19,7 @@ init_datasets = "yolo_trainer.pre_train.init_datasets:main"
 create_yolo_yamls = "yolo_trainer.pre_train.create_yolo_yamls:main"
 train_custom = "custom_trainer.train_custom_model:main"
 eval_custom = "custom_trainer.evaluate_custom_model:main"
+compare_custom = "custom_trainer.compare_custom_models:main"
 
 [tool.poetry.dependencies]
 python = "^3.10"
