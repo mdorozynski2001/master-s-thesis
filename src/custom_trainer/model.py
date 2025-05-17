@@ -444,11 +444,11 @@ class ObjectDetectorTrainer:
 
         return total_loss / len(self.train_dataloader)
 
-    def validate_model(self, val: bool) -> float:
+    def validate_model(self, val: bool = True) -> float:
         if val:
             dataloader = self.val_dataloader
         else:
-            dataloader = self.train_dataloader
+            dataloader = self.test_dataloader
 
         self.model.eval()
         total_loss = 0.0
