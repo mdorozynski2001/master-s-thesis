@@ -88,6 +88,7 @@ repos:
         entry: end-of-file-fixer
         language: system
         types: [text]
+        exclude: '\.(html|json)$'
 
       - id: trailing-whitespace-fixer
         name: trailing-whitespace-fixer

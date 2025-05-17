@@ -19,7 +19,7 @@ def inner_main(datasets_dir: Path = typer.Argument(DATASETS_DIR, file_okay=False
         print(f"For {split} found: {len(datasets_paths)} datasets")
 
         for dataset in datasets_paths:
-            dataset_txt_file_path = dataset / f"{dataset.name}_{split}.yaml"
+            dataset_txt_file_path = dataset / f"{dataset.name}_config.yaml"
             single_dataset_path = WORKDIR / dataset
             create_yaml(dataset_txt_file_path, single_dataset_path, split)
             all_datasets[split].append(str(single_dataset_path))
