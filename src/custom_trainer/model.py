@@ -22,74 +22,14 @@ from custom_trainer.dataset import YoloDataset
 class DetectionLoss(nn.Module):
     def __init__(
         self,
-        lambda_coord: float = 5.0,
-        lambda_noobj: float = 0.5,
-        lambda_conf: float = 1.0,
-        lambda_iou: float = 2.0,
-        lambda_metrics: float = 3.0,
+        lambda_box: float = 5.0,
+        lambda_cls: float = 1.0,
     ) -> None:
         super(DetectionLoss, self).__init__()
-        self.bbox_loss = nn.SmoothL1Loss()
-        self.class_loss = nn.CrossEntropyLoss(ignore_index=2)
-        self.conf_loss = nn.BCELoss()
-        self.lambda_coord = lambda_coord
-        self.lambda_noobj = lambda_noobj
-        self.lambda_conf = lambda_conf
-        self.lambda_iou = lambda_iou
-        self.lambda_metrics = lambda_metrics
-
-    def calculate_iou(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> torch.Tensor:
-        # Calculate intersection coordinates
-        x1 = torch.max(pred_boxes[..., 0], target_boxes[..., 0])
-        y1 = torch.max(pred_boxes[..., 1], target_boxes[..., 1])
-        x2 = torch.min(pred_boxes[..., 2], target_boxes[..., 2])
-        y2 = torch.min(pred_boxes[..., 3], target_boxes[..., 3])
-
-        # Calculate intersection area
-        intersection = torch.clamp(x2 - x1, min=0) * torch.clamp(y2 - y1, min=0)
-
-        # Calculate union area
-        pred_area = (pred_boxes[..., 2] - pred_boxes[..., 0]) * (pred_boxes[..., 3] - pred_boxes[..., 1])
-        target_area = (target_boxes[..., 2] - target_boxes[..., 0]) * (target_boxes[..., 3] - target_boxes[..., 1])
-        union = pred_area + target_area - intersection
-
-        # Calculate IoU
-        iou = intersection / (union + 1e-6)  # Add small epsilon to avoid division by zero
-        return iou
-
-    def calculate_precision_recall_loss(
-        self, pred_classes: torch.Tensor, target_classes: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        # Convert predictions to class indices
-        pred_indices = torch.argmax(pred_classes, dim=-1)
-
-        # Ensure both tensors have the same shape
-        if pred_indices.shape != target_classes.shape:
-            # Reshape to match if possible
-            if pred_indices.numel() == target_classes.numel():
-                pred_indices = pred_indices.view(target_classes.shape)
-            else:
-                # If shapes are incompatible, use a default loss
-                return torch.tensor(0.0, device=pred_classes.device), torch.tensor(0.0, device=pred_classes.device)
-
-        # Flatten tensors for sklearn metrics
-        pred_flat = pred_indices.view(-1).cpu().detach().numpy()
-        target_flat = target_classes.view(-1).cpu().detach().numpy()
-
-        # Calculate precision and recall using sklearn
-        # We need to handle the case where there are no predictions or targets
-        if len(pred_flat) == 0 or len(target_flat) == 0:
-            return torch.tensor(0.0, device=pred_classes.device), torch.tensor(0.0, device=pred_classes.device)
-
-        # Calculate precision and recall for each class
-        precision = precision_score(target_flat, pred_flat, average="macro", zero_division=0)
-        recall = recall_score(target_flat, pred_flat, average="macro", zero_division=0)
-
-        # Convert back to tensors
-        precision_tensor = torch.tensor(1.0 - precision, device=pred_classes.device)
-        recall_tensor = torch.tensor(1.0 - recall, device=pred_classes.device)
-
-        return precision_tensor, recall_tensor
+        self.box_loss = nn.MSELoss(reduction="none")
+        self.cls_loss = nn.CrossEntropyLoss(reduction="none", ignore_index=2)
+        self.lambda_box = lambda_box
+        self.lambda_cls = lambda_cls
 
     def forward(
         self,
@@ -102,37 +42,26 @@ class DetectionLoss(nn.Module):
         if target_bboxes.numel() == 0 or target_classes.numel() == 0:
             return torch.tensor(0.0, device=pred_bboxes.device, requires_grad=True)
 
-        # Bounding box loss for objects
-        bbox_mask = (target_classes != 2).unsqueeze(-1)
-        bbox_loss: torch.Tensor = self.lambda_coord * self.bbox_loss(
-            pred_bboxes[bbox_mask.expand_as(pred_bboxes)], target_bboxes[bbox_mask.expand_as(target_bboxes)]
-        )
+        # Create object mask (class 2 is background)
+        obj_mask = (target_classes != 2).float()  # [batch_size, num_boxes]
 
-        # IoU loss for objects
-        iou = self.calculate_iou(pred_bboxes, target_bboxes)
-        iou_loss = self.lambda_iou * (1 - iou[bbox_mask.squeeze(-1)]).mean()
+        # Box loss (MSE)
+        box_loss = self.box_loss(pred_bboxes, target_bboxes)  # [batch_size, num_boxes, 4]
+        box_loss = box_loss.mean(dim=-1)  # [batch_size, num_boxes]
+        box_loss = (box_loss * obj_mask).sum() / (obj_mask.sum() + 1e-16)
 
-        # Classification loss
-        pred_classes = pred_classes.permute(0, 2, 1)
-        class_loss: torch.Tensor = self.class_loss(pred_classes, target_classes)
+        # Classification loss (CrossEntropy)
+        pred_classes = pred_classes.permute(0, 2, 1)  # [batch_size, num_classes, num_boxes]
+        cls_loss = self.cls_loss(pred_classes, target_classes)  # [batch_size, num_boxes]
+        cls_loss = (cls_loss * obj_mask).sum() / (obj_mask.sum() + 1e-16)
 
-        # Confidence loss
-        # For objects (target_classes != 2), confidence should be high
-        # For background (target_classes == 2), confidence should be low
-        obj_mask = (target_classes != 2).float()
-        conf_loss = self.lambda_conf * self.conf_loss(confidences.squeeze(-1), obj_mask)
+        # Confidence loss (MSE)
+        conf_loss = self.box_loss(confidences.squeeze(-1), obj_mask).mean()
 
-        # Background loss (no object loss)
-        pred_probs = torch.softmax(pred_classes.permute(0, 2, 1), dim=-1)
-        noobj_mask = target_classes == 2
-        bg_probs = pred_probs[..., 0]
-        noobj_loss = self.lambda_noobj * torch.mean(noobj_mask.float() * bg_probs)
+        # Combine losses
+        total_loss = self.lambda_box * box_loss + self.lambda_cls * cls_loss + conf_loss
 
-        # Precision and recall loss
-        precision_loss, recall_loss = self.calculate_precision_recall_loss(pred_classes, target_classes)
-        metrics_loss = self.lambda_metrics * (precision_loss + recall_loss)
-
-        return bbox_loss + class_loss + noobj_loss + conf_loss + iou_loss + metrics_loss
+        return total_loss
 
 
 class Backbone(nn.Module):
@@ -144,22 +73,27 @@ class Backbone(nn.Module):
             nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(32),
             nn.LeakyReLU(0.1),
+            nn.Dropout2d(0.1),
             # Second block - 300x300x32 -> 150x150x64
             nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(64),
             nn.LeakyReLU(0.1),
+            nn.Dropout2d(0.1),
             # Third block - 150x150x64 -> 75x75x128
             nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(128),
             nn.LeakyReLU(0.1),
+            nn.Dropout2d(0.2),
             # Fourth block - 75x75x128 -> 38x38x256
             nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(256),
             nn.LeakyReLU(0.1),
+            nn.Dropout2d(0.2),
             # Fifth block - 38x38x256 -> 19x19x512
             nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(512),
             nn.LeakyReLU(0.1),
+            nn.Dropout2d(0.2),
         )
 
         layers_to_freeze = len(list(self.feature_extractor.children())) - trainable_layers
@@ -283,11 +217,8 @@ class ObjectDetectorTrainer:
         batch_size: int = 64,
         num_boxes: int = 30,
         trainable_layers: int = 5,
-        lambda_coord: float = 5.0,
-        lambda_noobj: float = 0.5,
-        lambda_conf: float = 1.0,
-        lambda_iou: float = 2.0,
-        lambda_metrics: float = 3.0,
+        lambda_box: float = 5.0,
+        lambda_cls: float = 1.0,
     ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = ObjectDetector(Backbone(trainable_layers), num_classes, num_boxes, image_size).to(self.device)
@@ -345,30 +276,25 @@ class ObjectDetectorTrainer:
         # Improved optimizer configuration
         self.optimizer = optim.AdamW(
             self.model.parameters(),
-            lr=0.0005,  # Lower initial learning rate
-            weight_decay=2e-4,  # Increased weight decay for better regularization
-            betas=(0.9, 0.999),  # Default Adam betas
-            eps=1e-8,  # Default Adam epsilon
-            amsgrad=True,  # Use AMSGrad variant for better convergence
+            lr=0.001,  # Slightly higher initial learning rate
+            weight_decay=1e-4,  # Reduced weight decay
+            betas=(0.9, 0.999),
         )
 
         # Improved scheduler configuration
         self.scheduler = optim.lr_scheduler.OneCycleLR(
             self.optimizer,
-            max_lr=0.002,  # Higher max learning rate
+            max_lr=0.001,  # Reduced max learning rate
             steps_per_epoch=len(self.train_dataloader),
             epochs=self.epochs,
-            pct_start=0.3,  # Longer warmup phase (30% of training)
-            anneal_strategy="cos",  # Cosine annealing
-            three_phase=True,  # Use three-phase learning rate schedule
+            pct_start=0.2,  # Shorter warmup
+            anneal_strategy="cos",
         )
 
         # Add gradient clipping
         self.grad_clip = 1.0  # Clip gradients to this value
 
-        self.criterion = DetectionLoss(lambda_coord, lambda_noobj, lambda_conf, lambda_iou, lambda_metrics).to(
-            self.device
-        )
+        self.criterion = DetectionLoss(lambda_box, lambda_cls)
 
     def save_model(self, final_save: bool = False) -> None:
         torch.save(self.model.state_dict(), self.output_folder / "best.pt")
@@ -380,11 +306,8 @@ class ObjectDetectorTrainer:
                 "epochs": self.epochs,
                 "batch_size": self.batch_size,
                 "num_boxes": self.num_boxes,
-                "lambda_coord": self.criterion.lambda_coord,
-                "lambda_noobj": self.criterion.lambda_noobj,
-                "lambda_conf": self.criterion.lambda_conf,
-                "lambda_iou": self.criterion.lambda_iou,
-                "lambda_metrics": self.criterion.lambda_metrics,
+                "lambda_box": self.criterion.lambda_box,
+                "lambda_cls": self.criterion.lambda_cls,
             }
             with open(self.output_folder / "summary.json", "w") as file:
                 json.dump(model_data, file, indent=4)
@@ -496,9 +419,15 @@ class ObjectDetectorTrainer:
 
                 total_loss += loss.item()
 
-                all_preds.extend(pred_classes.view(-1).cpu().tolist())
-                all_targets.extend(target_classes.view(-1).cpu().tolist())
+                # Filter out background class (2) for metrics
+                mask = target_classes != 2
+                filtered_preds = pred_classes[mask].cpu().tolist()
+                filtered_targets = target_classes[mask].cpu().tolist()
 
+                all_preds.extend(filtered_preds)
+                all_targets.extend(filtered_targets)
+
+        # Calculate metrics only on non-background classes
         self.precision = precision_score(all_targets, all_preds, average="macro", zero_division=0)
         self.recall = recall_score(all_targets, all_preds, average="macro", zero_division=0)
         self.f1 = f1_score(all_targets, all_preds, average="macro", zero_division=0)
@@ -666,14 +595,10 @@ def inner_main(
     batch_size: int = typer.Option(64, help="batch size"),
     num_classes: int = typer.Option(3, help="number of classes"),
     num_boxes: int = typer.Option(30, help="number of boxes"),
-    train: bool = typer.Option(True, help="train model"),
     model_path: Path = typer.Option(None, help="model path"),
     bacbkone_trainable_layers: int = typer.Option(5, help="number of backbone trainable layers"),
-    lambda_coord: float = typer.Option(5.0, help="lambda coord"),
-    lambda_noobj: float = typer.Option(0.5, help="lambda noobj"),
-    lambda_conf: float = typer.Option(1.0, help="lambda conf"),
-    lambda_iou: float = typer.Option(2.0, help="lambda iou"),
-    lambda_metrics: float = typer.Option(3.0, help="lambda metrics"),
+    lambda_box: float = typer.Option(5.0, help="lambda box"),
+    lambda_cls: float = typer.Option(1.0, help="lambda cls"),
 ) -> None:
     class_names = ["Class 0", "Class 1", "Class 2"]
     trainer = ObjectDetectorTrainer(
@@ -684,17 +609,11 @@ def inner_main(
         dataset_path=dataset_path,
         epochs=epochs,
         trainable_layers=bacbkone_trainable_layers,
-        lambda_coord=lambda_coord,
-        lambda_noobj=lambda_noobj,
-        lambda_conf=lambda_conf,
-        lambda_iou=lambda_iou,
-        lambda_metrics=lambda_metrics,
+        lambda_box=lambda_box,
+        lambda_cls=lambda_cls,
     )
-    if train:
-        trainer.train_and_validate()
-    else:
-        trainer.model.load_state_dict(torch.load(model_path))
-        test_model_on_images(trainer.model, trainer.test_dataloader, class_names, trainer.device, num_images=20)
+    trainer.model.load_state_dict(torch.load(model_path))
+    test_model_on_images(trainer.model, trainer.test_dataloader, class_names, trainer.device, num_images=20)
 
 
 def main() -> None:

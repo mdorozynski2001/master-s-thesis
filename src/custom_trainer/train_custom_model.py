@@ -13,11 +13,8 @@ def inner_main(
     num_classes: int = typer.Option(3, help="number of classes"),
     num_boxes: int = typer.Option(30, help="number of boxes"),
     bacbkone_trainable_layers: int = typer.Option(5, help="number of backbone trainable layers"),
-    lambda_coord: float = typer.Option(5.0, help="lambda coord"),
-    lambda_noobj: float = typer.Option(0.5, help="lambda noobj"),
-    lambda_conf: float = typer.Option(1.0, help="lambda conf"),
-    lambda_iou: float = typer.Option(2.0, help="lambda iou"),
-    lambda_metrics: float = typer.Option(3.0, help="lambda metrics"),
+    lambda_box: float = typer.Option(5.0, help="lambda box"),
+    lambda_cls: float = typer.Option(1.0, help="lambda cls"),
 ) -> None:
     trainer = ObjectDetectorTrainer(
         image_size=image_size,
@@ -27,11 +24,8 @@ def inner_main(
         dataset_path=dataset_path,
         epochs=epochs,
         trainable_layers=bacbkone_trainable_layers,
-        lambda_coord=lambda_coord,
-        lambda_noobj=lambda_noobj,
-        lambda_conf=lambda_conf,
-        lambda_iou=lambda_iou,
-        lambda_metrics=lambda_metrics,
+        lambda_box=lambda_box,
+        lambda_cls=lambda_cls,
     )
     trainer.train_and_validate()
 
