@@ -12,7 +12,7 @@ class YoloDataset(Dataset):  # type: ignore[type-arg]
         self.image_folder = image_folder
         self.label_folder = label_folder
         self.transform = transform
-        self.image_files = [f for f in os.listdir(image_folder) if f.endswith(".jpg")]
+        self.image_files = [f for f in os.listdir(image_folder)]
 
     def __len__(self) -> int:
         return len(self.image_files)
@@ -20,7 +20,7 @@ class YoloDataset(Dataset):  # type: ignore[type-arg]
     def __getitem__(self, idx: int):
         img_name = self.image_files[idx]
         img_path = os.path.join(self.image_folder, img_name)
-        label_path = os.path.join(self.label_folder, img_name.replace(".jpg", ".txt"))
+        label_path = os.path.join(self.label_folder, Path(img_name).stem + ".txt")
 
         # Wczytanie obrazu
         image = Image.open(img_path).convert("RGB")
