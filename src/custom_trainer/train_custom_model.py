@@ -7,7 +7,7 @@ from custom_trainer.model import ObjectDetectorTrainer
 
 def inner_main(
     dataset_path: Path = typer.Argument(..., help="path to dataset"),
-    image_size: int = typer.Option(600, help="image size"),
+    image_size: int = typer.Option(640, help="image size"),
     epochs: int = typer.Option(200, help="epochs"),
     batch_size: int = typer.Option(64, help="batch size"),
     num_classes: int = typer.Option(3, help="number of classes"),

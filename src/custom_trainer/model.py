@@ -17,7 +17,7 @@ from torchvision import transforms
 from tqdm import tqdm
 
 from custom_trainer.dataset import YoloDataset
-
+import time
 
 class DetectionLoss(nn.Module):
     def __init__(
@@ -459,14 +459,24 @@ class ObjectDetectorTrainer:
 
         with open(self.metrics_csv_file, mode="w") as file:
             writer = csv.writer(file)
-            writer.writerow(["epoch", "recall", "precision", "f1", "train_loss", "val_loss"])
+            writer.writerow(["epoch", "recall", "precision", "f1", "train_loss", "val_loss", "train_time", "val_time"])
 
             best_val_loss = float("inf")
             patience_counter = 0
             for epoch in range(self.epochs):
                 print(f"\nEpoch {epoch + 1}/{self.epochs}")
+                start_train_time = time.time()
                 train_loss = self.train_model()
+                end_train_time = time.time()
+                train_time = int(end_train_time - start_train_time)
+                train_time_string = f"{train_time // 60}:{train_time % 60}"
+
+                start_val_time = time.time()
                 val_loss = self.validate_model(val)
+                end_val_time = time.time()
+                val_time =  int(end_val_time - start_val_time)
+                val_time_string = f"{val_time // 60}:{val_time % 60}"
+
                 writer.writerow(
                     [
                         epoch,
@@ -475,6 +485,8 @@ class ObjectDetectorTrainer:
                         round(self.f1, 4),
                         round(train_loss, 4),
                         round(val_loss, 4),
+                        train_time_string,
+                        val_time_string,
                     ]
                 )
 
