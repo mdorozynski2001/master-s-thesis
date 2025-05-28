@@ -445,7 +445,7 @@ class ObjectDetectorTrainer:
         return total_loss / len(dataloader)
 
     def train_and_validate(self, val: bool = True) -> None:
-        patience = max(5, int(self.epochs * (0.1)))
+        patience = max(5, int(self.epochs * (0.05)))
         output_folder_template = Path("runs/detect/custom_model/train")
         self.output_folder = output_folder_template
         i = 2
