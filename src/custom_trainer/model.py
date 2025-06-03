@@ -17,7 +17,7 @@ from torchvision import transforms
 from tqdm import tqdm
 
 from custom_trainer.dataset import YoloDataset
-
+import time
 
 class DetectionLoss(nn.Module):
     def __init__(
@@ -69,8 +69,8 @@ class Backbone(nn.Module):
         super(Backbone, self).__init__()
 
         self.feature_extractor = nn.Sequential(
-            # First block - input 600x600x1 -> 300x300x32
-            nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),
+            # First block - input 600x600x3 -> 300x300x32
+            nn.Conv2d(3, 32, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(32),
             nn.LeakyReLU(0.1),
             nn.Dropout2d(0.1),
@@ -108,7 +108,7 @@ class Backbone(nn.Module):
 
 
 def calculate_linear_input(image_size: int, feature_extractor: Backbone) -> int:
-    dummy_input = torch.randn(1, 1, image_size, image_size)
+    dummy_input = torch.randn(1, 3, image_size, image_size)
 
     feature_map = feature_extractor(dummy_input)
 
@@ -231,7 +231,6 @@ class ObjectDetectorTrainer:
         train_transform = transforms.Compose(
             [
                 transforms.Resize((image_size, image_size)),
-                transforms.Grayscale(num_output_channels=1),
                 transforms.RandomApply(
                     [
                         transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
@@ -247,7 +246,6 @@ class ObjectDetectorTrainer:
         transform = transforms.Compose(
             [
                 transforms.Resize((image_size, image_size)),
-                transforms.Grayscale(num_output_channels=1),
                 transforms.ToTensor(),
             ]
         )
@@ -447,7 +445,7 @@ class ObjectDetectorTrainer:
         return total_loss / len(dataloader)
 
     def train_and_validate(self, val: bool = True) -> None:
-        patience = max(5, int(self.epochs * (0.1)))
+        patience = max(5, int(self.epochs * (0.05)))
         output_folder_template = Path("runs/detect/custom_model/train")
         self.output_folder = output_folder_template
         i = 2
@@ -461,14 +459,24 @@ class ObjectDetectorTrainer:
 
         with open(self.metrics_csv_file, mode="w") as file:
             writer = csv.writer(file)
-            writer.writerow(["epoch", "recall", "precision", "f1", "train_loss", "val_loss"])
+            writer.writerow(["epoch", "recall", "precision", "f1", "train_loss", "val_loss", "train_time", "val_time"])
 
             best_val_loss = float("inf")
             patience_counter = 0
             for epoch in range(self.epochs):
                 print(f"\nEpoch {epoch + 1}/{self.epochs}")
+                start_train_time = time.time()
                 train_loss = self.train_model()
+                end_train_time = time.time()
+                train_time = int(end_train_time - start_train_time)
+                train_time_string = f"{train_time // 60}:{train_time % 60}"
+
+                start_val_time = time.time()
                 val_loss = self.validate_model(val)
+                end_val_time = time.time()
+                val_time =  int(end_val_time - start_val_time)
+                val_time_string = f"{val_time // 60}:{val_time % 60}"
+
                 writer.writerow(
                     [
                         epoch,
@@ -477,6 +485,8 @@ class ObjectDetectorTrainer:
                         round(self.f1, 4),
                         round(train_loss, 4),
                         round(val_loss, 4),
+                        train_time_string,
+                        val_time_string,
                     ]
                 )
 
@@ -544,15 +554,12 @@ def visualize_detections(
 ) -> None:
     for i in range(min(num_images, len(detections))):
         image, boxes, labels, scores, confidences = detections[i]
-        # Handle grayscale image (1 channel)
-        image = image.squeeze(0).cpu().numpy()  # Remove channel dimension
+        # Convert tensor to numpy array and adjust for RGB visualization
+        image = image.permute(1, 2, 0).cpu().numpy()  # Change from (C, H, W) to (H, W, C)
         image = (image * 255).astype("uint8")
         image = np.ascontiguousarray(image)
 
-        # Convert to RGB for visualization
-        image_rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
-
-        h, w = image.shape  # Now shape is (H, W) for grayscale
+        h, w, _ = image.shape
         for box, label, score, conf in zip(boxes, labels, scores, confidences):
             if score < conf_threshold:
                 continue
@@ -564,9 +571,9 @@ def visualize_detections(
             y2 = int(y2 * h)
 
             label_name = class_names[label] if label < len(class_names) else f"Class {label}"
-            cv2.rectangle(image_rgb, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(
-                image_rgb,
+                image,
                 f"{label_name} {score:.2f} (conf: {conf.item():.2f})",
                 (x1, y1 - 5),
                 cv2.FONT_HERSHEY_SIMPLEX,
@@ -576,7 +583,7 @@ def visualize_detections(
             )
 
         plt.figure(figsize=(8, 8))
-        plt.imshow(image_rgb)
+        plt.imshow(image)
         plt.axis("off")
         plt.show()
 

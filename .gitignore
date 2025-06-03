@@ -1,5 +1,6 @@
 datasets/
 runs/
+*.pt
 *.pyc
 .cache/
 images/
