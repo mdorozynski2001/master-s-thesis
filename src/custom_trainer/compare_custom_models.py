@@ -48,12 +48,13 @@ def inner_main(
             yaxis_title="Value",
             barmode="group",
             legend_title="Models",
+            yaxis_range=[0, 1],
         )
 
-        output_html = output_dir / "metrics_comparison_full.html"
-        fig.write_html(output_html)
+    output_html = output_dir / "metrics_comparison_full.html"
+    fig.write_html(output_html)
 
-        print(f"Chart saved to: {output_html}")
+    print(f"Chart saved to: {output_html}")
 
 
 def main() -> None:
