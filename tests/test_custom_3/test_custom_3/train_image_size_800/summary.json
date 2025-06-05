@@ -1,0 +1,9 @@
+{
+    "num_classes": 3,
+    "image_size": 800,
+    "epochs": 200,
+    "batch_size": 16,
+    "num_boxes": 30,
+    "lambda_box": 5.0,
+    "lambda_cls": 1.0
+}
