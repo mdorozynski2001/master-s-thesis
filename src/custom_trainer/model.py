@@ -629,7 +629,12 @@ def visualize_detections(
 
 
 def test_model_on_images(
-    model: ObjectDetector, dataloader: DataLoader, class_names: list[str], device: torch.device, output_dir: Path, num_images: int = 5
+    model: ObjectDetector,
+    dataloader: DataLoader,
+    class_names: list[str],
+    device: torch.device,
+    output_dir: Path,
+    num_images: int = 5,
 ) -> None:
     detections = run_inference(model, dataloader, device)
     visualize_detections(detections, class_names, output_dir, num_images)
@@ -661,7 +666,9 @@ def inner_main(
         lambda_cls=lambda_cls,
     )
     trainer.model.load_state_dict(torch.load(model_path))
-    test_model_on_images(trainer.model, trainer.test_dataloader, class_names, trainer.device, output_dir, num_images=1000)
+    test_model_on_images(
+        trainer.model, trainer.test_dataloader, class_names, trainer.device, output_dir, num_images=1000
+    )
 
 
 def main() -> None:
