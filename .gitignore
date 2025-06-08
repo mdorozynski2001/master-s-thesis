@@ -6,3 +6,6 @@ runs/
 images/
 labels/
 *.cache
+*.jpg
+*.png
+
