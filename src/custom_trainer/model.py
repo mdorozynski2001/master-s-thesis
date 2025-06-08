@@ -1,10 +1,10 @@
 import csv
 import json
+import time
 from pathlib import Path
 from typing import Any
 
 import cv2
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.optim as optim
@@ -17,7 +17,7 @@ from torchvision import transforms
 from tqdm import tqdm
 
 from custom_trainer.dataset import YoloDataset
-import time
+
 
 class DetectionLoss(nn.Module):
     def __init__(
@@ -474,7 +474,7 @@ class ObjectDetectorTrainer:
                 start_val_time = time.time()
                 val_loss = self.validate_model(val)
                 end_val_time = time.time()
-                val_time =  int(end_val_time - start_val_time)
+                val_time = int(end_val_time - start_val_time)
                 val_time_string = f"{val_time // 60}:{val_time % 60}"
 
                 writer.writerow(
@@ -550,14 +550,39 @@ def run_inference(
 
 
 def visualize_detections(
-    detections: list[Any], class_names: list[str], num_images: int = 5, conf_threshold: float = 0.2
+    detections: list[Any], class_names: list[str], output_dir: Path, num_images: int = 5, conf_threshold: float = 0.1
 ) -> None:
-    for i in range(min(num_images, len(detections))):
-        image, boxes, labels, scores, confidences = detections[i]
+    # Create output directories
+    detections_dir = output_dir / "with_detections"
+    original_dir = output_dir / "original"
+    detections_dir.mkdir(parents=True, exist_ok=True)
+    original_dir.mkdir(parents=True, exist_ok=True)
+
+    current_idx = 0
+
+    def on_trackbar_change(x):
+        nonlocal current_idx
+        current_idx = x
+
+    cv2.namedWindow("Detections", cv2.WINDOW_NORMAL)
+    cv2.createTrackbar("Image", "Detections", 0, len(detections) - 1, on_trackbar_change)
+
+    while True:
+        if current_idx >= len(detections):
+            current_idx = 0
+        elif current_idx < 0:
+            current_idx = len(detections) - 1
+
+        image, boxes, labels, scores, confidences = detections[current_idx]
         # Convert tensor to numpy array and adjust for RGB visualization
         image = image.permute(1, 2, 0).cpu().numpy()  # Change from (C, H, W) to (H, W, C)
         image = (image * 255).astype("uint8")
+        # Convert RGB to BGR for OpenCV
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
         image = np.ascontiguousarray(image)
+
+        # Create a copy for detections
+        image_with_detections = image.copy()
 
         h, w, _ = image.shape
         for box, label, score, conf in zip(boxes, labels, scores, confidences):
@@ -571,10 +596,10 @@ def visualize_detections(
             y2 = int(y2 * h)
 
             label_name = class_names[label] if label < len(class_names) else f"Class {label}"
-            cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.rectangle(image_with_detections, (x1, y1), (x2, y2), (0, 255, 0), 2)
             cv2.putText(
-                image,
-                f"{label_name} {score:.2f} (conf: {conf.item():.2f})",
+                image_with_detections,
+                label_name,
                 (x1, y1 - 5),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
@@ -582,32 +607,48 @@ def visualize_detections(
                 2,
             )
 
-        plt.figure(figsize=(8, 8))
-        plt.imshow(image)
-        plt.axis("off")
-        plt.show()
+        cv2.imshow("Detections", image_with_detections)
+        cv2.setTrackbarPos("Image", "Detections", current_idx)
+
+        key = cv2.waitKey(0) & 0xFF
+
+        if key == ord("q"):
+            break
+        elif key == ord("n"):
+            current_idx += 1
+        elif key == ord("p"):
+            current_idx -= 1
+        elif key == ord("s"):
+            # Save both images
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            cv2.imwrite(str(detections_dir / f"image_{current_idx}_{timestamp}.jpg"), image_with_detections)
+            cv2.imwrite(str(original_dir / f"image_{current_idx}_{timestamp}.jpg"), image)
+            print(f"Saved images to {output_dir}")
+
+    cv2.destroyAllWindows()
 
 
 def test_model_on_images(
-    model: ObjectDetector, dataloader: DataLoader, class_names: list[str], device: torch.device, num_images: int = 5
+    model: ObjectDetector, dataloader: DataLoader, class_names: list[str], device: torch.device, output_dir: Path, num_images: int = 5
 ) -> None:
     detections = run_inference(model, dataloader, device)
-    visualize_detections(detections, class_names, num_images)
+    visualize_detections(detections, class_names, output_dir, num_images)
 
 
 def inner_main(
     dataset_path: Path = typer.Argument(..., help="path to dataset"),
-    image_size: int = typer.Option(600, help="image size"),
+    image_size: int = typer.Option(640, help="image size"),
     epochs: int = typer.Option(200, help="epochs"),
     batch_size: int = typer.Option(64, help="batch size"),
     num_classes: int = typer.Option(3, help="number of classes"),
     num_boxes: int = typer.Option(30, help="number of boxes"),
     model_path: Path = typer.Option(None, help="model path"),
-    bacbkone_trainable_layers: int = typer.Option(5, help="number of backbone trainable layers"),
+    bacbkone_trainable_layers: int = typer.Option(4, help="number of backbone trainable layers"),
     lambda_box: float = typer.Option(5.0, help="lambda box"),
     lambda_cls: float = typer.Option(1.0, help="lambda cls"),
+    output_dir: Path = typer.Option(Path("test_images"), help="output directory for saved images"),
 ) -> None:
-    class_names = ["Class 0", "Class 1", "Class 2"]
+    class_names = ["Person", "Forklift", "Class 2"]
     trainer = ObjectDetectorTrainer(
         image_size=image_size,
         batch_size=batch_size,
@@ -620,7 +661,7 @@ def inner_main(
         lambda_cls=lambda_cls,
     )
     trainer.model.load_state_dict(torch.load(model_path))
-    test_model_on_images(trainer.model, trainer.test_dataloader, class_names, trainer.device, num_images=20)
+    test_model_on_images(trainer.model, trainer.test_dataloader, class_names, trainer.device, output_dir, num_images=1000)
 
 
 def main() -> None:
