@@ -15,7 +15,7 @@ compare_directory_output="comparison"
 
 regenerate_evaluation_results=false
 evaluate_single_flag=true
-evaluate_splitted_dataset_flag=true
+evaluate_splitted_dataset_flag=false
 
 while getopts "d:i:m:f:o:r:e:s" flag; do
     case "${flag}" in
